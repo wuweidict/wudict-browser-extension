@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>wudict Hover — Options</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <h1>wudict Hover</h1>
+
+      <section>
+        <h2>Server</h2>
+        <label class="row">
+          <span>Base URL</span>
+          <input id="baseUrl" type="url" spellcheck="false" placeholder="http://127.0.0.1:6888" />
+        </label>
+        <p class="hint">
+          Both the address and the port are configurable in wudict, so this is
+          configuration rather than a fixed value.
+        </p>
+        <div class="row actions">
+          <button id="test" type="button">Test connection</button>
+          <button id="grant" type="button" hidden>Grant access</button>
+          <span id="status" class="status" role="status"></span>
+        </div>
+      </section>
+
+      <section>
+        <h2>Trigger</h2>
+        <label class="row">
+          <span>Enabled</span>
+          <input id="enabled" type="checkbox" />
+        </label>
+        <label class="row">
+          <span>Hold key</span>
+          <select id="modifier">
+            <option value="none">No key — hover alone</option>
+            <option value="alt">Alt / Option</option>
+            <option value="ctrl">Control</option>
+            <option value="shift">Shift</option>
+            <option value="meta">Command / Windows</option>
+          </select>
+        </label>
+        <label class="row">
+          <span>Hover delay</span>
+          <input id="debounceMs" type="number" min="0" max="2000" step="10" />
+          <span class="unit">ms</span>
+        </label>
+      </section>
+
+      <section>
+        <h2>Lookups</h2>
+        <label class="row">
+          <span>Dictionaries per lookup</span>
+          <input id="dictLimit" type="number" min="1" max="8" />
+        </label>
+        <label class="row">
+          <span>Entries per dictionary</span>
+          <input id="resultsPerDict" type="number" min="1" max="10" />
+        </label>
+        <label class="row">
+          <span>Fallback attempts</span>
+          <input id="maxCandidates" type="number" min="1" max="8" />
+        </label>
+        <p class="hint">
+          wudict does not lemmatise, so a word like <em>running</em> is found only if
+          a dictionary stores it. Fallback attempts try apostrophe, possessive,
+          hyphen and suffix variants — each is one more request, but only for a word
+          that would otherwise show nothing.
+        </p>
+      </section>
+
+      <section>
+        <h2>Dictionaries</h2>
+        <div class="row actions">
+          <button id="refresh" type="button">Refresh list</button>
+          <button id="auto" type="button">Use automatic selection</button>
+          <span id="dictStatus" class="status"></span>
+        </div>
+        <p class="hint">
+          Leave everything unchecked to let the extension pick automatically — the
+          first capable dictionaries in server order. Order here follows the server.
+        </p>
+        <ul id="dicts" class="dicts"></ul>
+      </section>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

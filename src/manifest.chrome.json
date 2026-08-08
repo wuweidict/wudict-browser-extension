@@ -8,6 +8,21 @@
     "service_worker": "background/main.js",
     "type": "module"
   },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "action": {
+    "default_title": "wudict Hover — options"
+  },
   "permissions": ["storage"],
   "host_permissions": ["http://127.0.0.1:6888/*"],
   "optional_host_permissions": ["http://*/*", "https://*/*"]

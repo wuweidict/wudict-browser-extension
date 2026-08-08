@@ -10,8 +10,6 @@
 // host_permissions at install, and until the user grants it the fetch fails as a
 // CORS error carrying "Status code: 200" — the server answered, the extension was
 // not allowed to read it.
-//
-// There is no content script yet, so nothing connects the port until session 3.
 
 import { api } from '../common/api.js';
 import {
@@ -30,6 +28,7 @@ import {
   HIT,
   LOOKUP,
   LOOKUP_DEFAULTS,
+  OUTCOME,
   PORT_NAME,
 } from '../common/protocol.js';
 import { getSettings } from '../common/settings.js';
@@ -83,8 +82,6 @@ api.runtime.onConnect.addListener((port) => {
   port.onMessage.addListener((message) => {
     switch (message?.type) {
       case LOOKUP:
-        // One lookup in flight per port: the previous one is aborted, and the
-        // server stops streaming for an aborted request.
         void runLookup(port, session, message);
         break;
       case CANCEL:
@@ -102,17 +99,19 @@ api.runtime.onConnect.addListener((port) => {
 });
 
 async function runLookup(port, session, message) {
+  // One lookup in flight per port. The server stops streaming for an aborted
+  // request, so this saves work on both sides.
   session.controller?.abort();
   const controller = new AbortController();
   session.controller = controller;
 
   const { id } = message;
   const post = (payload) => {
-    // The port may be gone (navigation, tab close) and posting then throws.
     if (controller.signal.aborted) return;
     try {
       port.postMessage(payload);
     } catch {
+      // The port is gone (navigation, tab close).
       controller.abort();
     }
   };
@@ -121,64 +120,52 @@ async function runLookup(port, session, message) {
     const { baseUrl } = await getSettings();
     const current = await ensureRegistry(baseUrl);
 
-    const query = {
-      q: message.q,
+    const base = {
       mode: message.mode ?? LOOKUP_DEFAULTS.mode,
       n: message.n ?? LOOKUP_DEFAULTS.n,
       format: message.format ?? LOOKUP_DEFAULTS.format,
     };
 
-    const dicts =
-      Array.isArray(message.dicts) && message.dicts.length > 0
-        ? message.dicts
-        : defaultSelection(current, { mode: query.mode });
-
+    const dicts = resolveDicts(message, current, base.mode);
     if (dicts.length === 0) {
       post({
         type: FAILED,
         id,
         reason: 'no-dictionaries',
-        message: `no dictionary can answer mode=${query.mode}`,
+        message: `no dictionary can answer mode=${base.mode}`,
       });
       return;
     }
 
-    if (servedFromCache(post, id, dicts, query, current)) return;
+    const terms = (message.candidates ?? []).filter((term) => typeof term === 'string');
+    if (terms.length === 0) {
+      post({ type: FAILED, id, reason: 'invalid', message: 'no candidate terms' });
+      return;
+    }
 
-    let slots = null;
-    for await (const frame of search(baseUrl, { ...query, dicts }, { signal: controller.signal })) {
-      if (frame.t === BEGIN) {
-        slots = frame.slots;
-        post({
-          type: BEGIN,
-          id,
-          // The server repeats the id here; the real names come from the registry.
-          slots: slots.map((slot) => ({ dict: slot.dict, name: labelFor(current, slot.dict) })),
-        });
-
-        const dropped = droppedIds(dicts, slots);
-        if (dropped.length > 0) {
-          // Ids derive from paths, so a dropped id means the registry is stale.
-          // Refresh in the background; the next lookup uses current ids.
-          void refreshRegistry(baseUrl).catch(() => {});
-        }
-        continue;
-      }
-
-      if (frame.t === HIT) {
-        const entry = {
-          name: frame.name,
-          outcome: frame.outcome,
-          results: frame.results,
-          error: frame.error,
-        };
-        // Misses are cached too, so a word that finds nothing is not re-probed.
-        cache.set(cacheKey(frame.dict, query), entry);
-        post({ type: HIT, id, i: frame.i, dict: frame.dict, ...entry });
+    // Walk the fallback chain, committing to the first candidate that actually
+    // produces a result. Nothing is posted before then, so a fallback never paints
+    // a popup that is immediately replaced.
+    for (const term of terms) {
+      if (controller.signal.aborted) return;
+      const query = { ...base, q: term };
+      const committed = await attemptCandidate({
+        post,
+        id,
+        baseUrl,
+        dicts,
+        query,
+        registry: current,
+        signal: controller.signal,
+        append: message.append === true,
+      });
+      if (committed) {
+        post({ type: END, id, term, matched: true, fromCache: committed.fromCache });
+        return;
       }
     }
 
-    post({ type: END, id, fromCache: false });
+    post({ type: END, id, term: null, matched: false, fromCache: false });
   } catch (error) {
     if (controller.signal.aborted || error.name === 'AbortError') return;
 
@@ -195,23 +182,96 @@ async function runLookup(port, session, message) {
 }
 
 /**
- * Serve the whole lookup from cache, or nothing. A partial hit refetches the full
- * list rather than merging a subset back in by slot index.
+ * Run one candidate. Returns `{ fromCache }` if it produced results and was
+ * rendered, or false if it found nothing and the chain should continue.
  */
-function servedFromCache(post, id, dicts, query, current) {
-  const keys = dicts.map((dictId) => cacheKey(dictId, query));
-  if (!keys.every((key) => cache.has(key))) return false;
+async function attemptCandidate({
+  post,
+  id,
+  baseUrl,
+  dicts,
+  query,
+  registry: current,
+  signal,
+  append,
+}) {
+  const slotsFor = (ids) => ids.map((dict) => ({ dict, name: labelFor(current, dict) }));
 
-  post({
-    type: BEGIN,
-    id,
-    slots: dicts.map((dictId) => ({ dict: dictId, name: labelFor(current, dictId) })),
-  });
-  dicts.forEach((dictId, i) => {
-    post({ type: HIT, id, i, dict: dictId, ...cache.get(cacheKey(dictId, query)) });
-  });
-  post({ type: END, id, fromCache: true });
-  return true;
+  // All-or-nothing: a partial hit refetches rather than merging a subset back in.
+  const keys = dicts.map((dict) => cacheKey(dict, query));
+  if (keys.every((key) => cache.has(key))) {
+    const entries = dicts.map((dict) => cache.get(cacheKey(dict, query)));
+    if (!entries.some((entry) => entry.outcome === OUTCOME.RESULTS)) return false;
+
+    post({ type: BEGIN, id, term: query.q, slots: slotsFor(dicts), append, fromCache: true });
+    entries.forEach((entry, i) => post({ type: HIT, id, i, dict: dicts[i], ...entry }));
+    return { fromCache: true };
+  }
+
+  let committed = false;
+  let slots = null;
+  const buffered = [];
+
+  for await (const frame of search(baseUrl, { ...query, dicts }, { signal })) {
+    if (frame.t === 'begin') {
+      slots = frame.slots;
+      const dropped = droppedIds(dicts, slots);
+      if (dropped.length > 0) {
+        // Ids derive from paths, so a dropped id means the registry is stale.
+        void refreshRegistry(baseUrl).catch(() => {});
+      }
+      continue;
+    }
+
+    if (frame.t !== 'hit') continue;
+
+    const entry = {
+      name: frame.name,
+      outcome: frame.outcome,
+      results: frame.results,
+      error: frame.error,
+    };
+    // Misses are cached too: without that, a word whose chain ends in nothing
+    // re-probes the server on every crossing.
+    cache.set(cacheKey(frame.dict, query), entry);
+
+    const payload = { type: HIT, id, i: frame.i, dict: frame.dict, ...entry };
+
+    if (!committed && frame.outcome === OUTCOME.RESULTS) {
+      committed = true;
+      post({
+        type: BEGIN,
+        id,
+        term: query.q,
+        // The server repeats the id in slots[].name; real names come from the
+        // registry.
+        slots: slotsFor(slots.map((slot) => slot.dict)),
+        append,
+        fromCache: false,
+      });
+      for (const held of buffered) post(held);
+      buffered.length = 0;
+    }
+
+    if (committed) post(payload);
+    else buffered.push(payload);
+  }
+
+  return committed ? { fromCache: false } : false;
+}
+
+/**
+ * Which dictionaries to query: an explicit list, or the next capable ones not
+ * already on screen (the "more" flow).
+ */
+function resolveDicts(message, current, mode) {
+  if (Array.isArray(message.dicts) && message.dicts.length > 0) return message.dicts;
+
+  const exclude = new Set(message.exclude ?? []);
+  const capable = defaultSelection(current, { mode, limit: Infinity });
+  // The server opens at most 8 concurrently; past that latency grows with the queue.
+  const limit = Math.min(message.limit ?? 3, 8);
+  return capable.filter((id) => !exclude.has(id)).slice(0, limit);
 }
 
 function describeFetchFailure(error) {
@@ -278,6 +338,10 @@ globalThis.wudictStats = () => ({
 });
 globalThis.wudictClearCache = () => cache.clear();
 
+// ------------------------------------------------------------------- lifecycle
+
+api.action?.onClicked.addListener(() => api.runtime.openOptionsPage());
+
 // Bootstrap the registry once, so the first hover does not pay for it. Never polled.
 api.runtime.onInstalled.addListener(() => void bootstrap('onInstalled'));
 api.runtime.onStartup.addListener(() => void bootstrap('onStartup'));
@@ -292,12 +356,24 @@ async function bootstrap(trigger) {
   }
 }
 
-// Kept for other contexts (the options page's "Test connection"): a context does not
-// receive its own messages, so this is not what the background console uses.
+// Used by the options page. A context does not receive its own messages, so this is
+// not what the background console uses.
 api.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type !== 'wudict:smoke') return false;
-  smoke().then(sendResponse, (error) =>
-    sendResponse({ ok: false, reason: 'exception', message: String(error) }),
-  );
-  return true;
+  if (message?.type === 'wudict:smoke') {
+    smoke().then(sendResponse, (error) =>
+      sendResponse({ ok: false, reason: 'exception', message: String(error) }),
+    );
+    return true;
+  }
+  if (message?.type === 'wudict:registry') {
+    (async () => {
+      const { baseUrl } = await getSettings();
+      return message.refresh ? refreshRegistry(baseUrl) : ensureRegistry(baseUrl);
+    })().then(
+      (value) => sendResponse({ ok: true, registry: value }),
+      (error) => sendResponse({ ok: false, message: error.message }),
+    );
+    return true;
+  }
+  return false;
 });

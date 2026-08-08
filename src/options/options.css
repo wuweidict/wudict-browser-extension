@@ -1,0 +1,176 @@
+:root {
+  color-scheme: light dark;
+  --fg: #1a1a1a;
+  --bg: #ffffff;
+  --muted: #666;
+  --line: rgba(0, 0, 0, 0.14);
+  --accent: #0b5cad;
+  --ok: #1a7f37;
+  --bad: #a12;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #e8e6e0;
+    --bg: #1c1c1a;
+    --muted: #9a978f;
+    --line: rgba(255, 255, 255, 0.16);
+    --accent: #7ab8ff;
+    --ok: #4ac26b;
+    --bad: #ff7b72;
+  }
+}
+
+body {
+  margin: 0;
+  padding: 24px;
+  background: var(--bg);
+  color: var(--fg);
+  font:
+    14px/1.5 -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+}
+
+main {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+h1 {
+  font-size: 20px;
+  margin: 0 0 20px;
+}
+
+h2 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 0 0 10px;
+}
+
+section {
+  border-top: 1px solid var(--line);
+  padding: 18px 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+}
+
+.row > span:first-child {
+  flex: 0 0 180px;
+}
+
+.row.actions {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+input[type='url'],
+input[type='number'],
+select {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 5px 7px;
+}
+
+input[type='url'] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+input[type='number'] {
+  width: 84px;
+}
+
+input[type='url']:invalid {
+  border-color: var(--bad);
+}
+
+button {
+  font: inherit;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 5px 11px;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--accent);
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 6px 0 0;
+}
+
+.unit {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.status {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.status.ok {
+  color: var(--ok);
+}
+
+.status.bad {
+  color: var(--bad);
+}
+
+.dicts {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  max-height: 340px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.dicts li {
+  border-top: 1px solid var(--line);
+}
+
+.dicts li:first-child {
+  border-top: 0;
+}
+
+.dicts label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.dicts .name {
+  flex: 1 1 auto;
+}
+
+.dicts .caps {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dicts li.incapable .name {
+  color: var(--muted);
+}

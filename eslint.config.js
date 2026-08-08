@@ -57,4 +57,14 @@ export default [
     },
     rules,
   },
+  {
+    // Build tooling runs under node.
+    files: ['tools/**/*.mjs'],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: 'module',
+      globals: { ...shared, process: 'readonly' },
+    },
+    rules,
+  },
 ];

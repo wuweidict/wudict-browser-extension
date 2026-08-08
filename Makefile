@@ -57,6 +57,18 @@ CHROME_BIN ?= $(shell /bin/bash -c 'for c in \
 # are assembled and version-stamped instead.
 SOURCES := $(shell find $(SRC) -type f ! -name 'manifest.*.json' ! -name '.DS_Store')
 
+# MV3 content scripts cannot be ES modules, so these are concatenated into one
+# classic script at build time. Order is dependency order — see tools/bundle-content.mjs.
+CONTENT_SOURCES := \
+	$(SRC)/common/api.js \
+	$(SRC)/common/protocol.js \
+	$(SRC)/common/settings.js \
+	$(SRC)/content/words.js \
+	$(SRC)/content/caret.js \
+	$(SRC)/content/sanitize.js \
+	$(SRC)/content/popup.js \
+	$(SRC)/content/main.js
+
 CHROME_DIR  := $(DIST)/chrome
 FIREFOX_DIR := $(DIST)/firefox
 CHROME_ZIP  := $(ART)/$(NAME)-$(VERSION)-chrome.zip
@@ -158,11 +170,13 @@ $(ART):
 # One rule per flavour via a pattern: the tree is copied minus the flavour
 # manifests, then manifest.<flavour>.json is stamped with VERSION as manifest.json.
 # The output dir is removed first so a deleted source file cannot linger in dist.
-$(DIST)/%/.build-stamp: $(SOURCES) $(SRC)/manifest.%.json VERSION
+$(DIST)/%/.build-stamp: $(SOURCES) $(SRC)/manifest.%.json VERSION tools/bundle-content.mjs
 	@rm -rf $(DIST)/$*
 	@mkdir -p $(DIST)/$*
-	@tar -cf - -C $(SRC) --exclude='manifest.*.json' --exclude='.DS_Store' . \
-		| tar -xf - -C $(DIST)/$*
+	@tar -cf - -C $(SRC) --exclude='manifest.*.json' --exclude='.DS_Store' \
+		--exclude='./content' --exclude='./content/*' . | tar -xf - -C $(DIST)/$*
+	@node tools/bundle-content.mjs $(DIST)/$*/content.js $(CONTENT_SOURCES)
+	@node --check $(DIST)/$*/content.js
 	@jq --arg v '$(VERSION)' '.version = $$v' $(SRC)/manifest.$*.json > $(DIST)/$*/manifest.json
 	@touch $@
 	@echo "  built $(DIST)/$* (v$(VERSION))"
@@ -176,7 +190,7 @@ build: build-chrome build-firefox ## Build both flavours
 
 .PHONY: lint
 lint: ## Run eslint over src/ (skipped if eslint is not installed)
-	@if [ -x "$(ESLINT)" ]; then $(ESLINT) $(SRC) $(TEST); \
+	@if [ -x "$(ESLINT)" ]; then $(ESLINT) $(SRC) $(TEST) tools; \
 	else echo "  eslint not installed — run 'make deps' (skipping)"; fi
 
 .PHONY: format
