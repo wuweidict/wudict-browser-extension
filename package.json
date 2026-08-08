@@ -1,0 +1,16 @@
+{
+  "name": "wudict-hover",
+  "private": true,
+  "description": "Hover dictionary popup backed by a local wudict server (Chrome + Firefox, MV3)",
+  "type": "module",
+  "scripts": {
+    "build": "make build",
+    "test": "make test",
+    "lint": "make lint"
+  },
+  "devDependencies": {
+    "eslint": "^9.14.0",
+    "prettier": "^3.3.3",
+    "web-ext": "^8.3.0"
+  }
+}

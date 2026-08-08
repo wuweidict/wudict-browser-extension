@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "wudict Hover",
+  "version": "0.0.0",
+  "description": "Show wudict dictionary definitions on hover, optionally behind a modifier key.",
+  "minimum_chrome_version": "116",
+  "background": {
+    "service_worker": "background/main.js",
+    "type": "module"
+  },
+  "permissions": ["storage"],
+  "host_permissions": ["http://127.0.0.1:6888/*"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"]
+}

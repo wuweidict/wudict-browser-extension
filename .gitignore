@@ -1,0 +1,15 @@
+dist/
+node_modules/
+
+# Persistent browser profiles used by `make run-chrome` / `make run-firefox`
+.profiles/
+
+# CRX signing key — the extension ID derives from it. Never commit.
+chrome-key.pem
+*.pem
+
+# AMO / Web Store credentials
+.env
+
+.DS_Store
+VERSION.tmp
