@@ -45,6 +45,11 @@ const popup = createPopup({
     state.pointerInPopup = false;
     scheduleHide();
   },
+  // A content script has no chrome.tabs; the worker opens it, reusing one wudict
+  // tab rather than accumulating twenty.
+  onOpen: ({ url, reuse }) => {
+    api.runtime.sendMessage({ type: 'wudict:open', url, reuse }).catch(() => {});
+  },
 });
 
 function scheduleHide() {
@@ -124,7 +129,7 @@ function onMessage(message) {
         popup.begin({
           term: message.term,
           slots: message.slots,
-          origin: new URL(state.settings.baseUrl).origin,
+          base: state.settings.baseUrl,
           anchorAt: state.lastPointer,
           fromCache: message.fromCache,
         });

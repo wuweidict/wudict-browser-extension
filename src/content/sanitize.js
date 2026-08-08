@@ -96,8 +96,13 @@ const DROPPED_ELEMENTS = new Set([
   'base',
 ]);
 
+// `id` is kept on everything: format=clean preserves ids, and an in-article
+// fragment link is the one shape that must scroll within the popup rather than
+// open a tab. Without ids there is nothing to scroll to.
+const GLOBAL_ATTRIBUTES = ['id'];
+
 const ALLOWED_ATTRIBUTES = {
-  a: ['href', 'title'],
+  a: ['title'],
   abbr: ['title'],
   audio: ['controls', 'preload'],
   img: ['alt', 'width', 'height'],
@@ -152,9 +157,14 @@ function appendImported(parent, node, serverOrigin) {
 }
 
 function copyAttributes(element, source, tag, serverOrigin) {
-  for (const name of ALLOWED_ATTRIBUTES[tag] ?? []) {
+  for (const name of [...GLOBAL_ATTRIBUTES, ...(ALLOWED_ATTRIBUTES[tag] ?? [])]) {
     const value = source.getAttribute(name);
     if (value !== null) element.setAttribute(name, value);
+  }
+
+  if (tag === 'a') {
+    copyAnchor(element, source, serverOrigin);
+    return;
   }
 
   const urlAttribute = URL_ATTRIBUTES[tag];
@@ -165,6 +175,33 @@ function copyAttributes(element, source, tag, serverOrigin) {
 
   const resolved = resolveUrl(raw, serverOrigin, tag);
   if (resolved !== null) element.setAttribute(urlAttribute, resolved);
+}
+
+/**
+ * An anchor's original href is preserved verbatim in `data-ref` and classified at
+ * click time, because the interesting ones are not URLs at all: `bword://run`,
+ * `d:run`, a bare `defendant`, `#sense2`.
+ *
+ * `href` itself is set only for real http(s) targets, so the link has a hover
+ * target and middle-click works. A bare href is deliberately NOT copied: in a
+ * popup injected into someone else's page it would resolve against *that page's*
+ * URL, navigating the host site — the same base-URL trap as the /res/ one,
+ * arriving through a different door. Every click is cancelled regardless.
+ */
+function copyAnchor(element, source, serverOrigin) {
+  const raw = source.getAttribute('href');
+  if (raw === null) return;
+
+  element.setAttribute('data-ref', raw);
+
+  const resolved = resolveUrl(raw, serverOrigin, 'a');
+  if (resolved === null) return;
+
+  element.setAttribute('href', resolved);
+  if (!resolved.startsWith(serverOrigin)) {
+    element.setAttribute('target', '_blank');
+    element.setAttribute('rel', 'noopener noreferrer');
+  }
 }
 
 /**
@@ -198,12 +235,6 @@ export function resolveUrl(raw, serverOrigin, tag) {
 }
 
 function applyElementPolicy(element, tag) {
-  if (tag === 'a') {
-    if (!element.hasAttribute('href')) return;
-    element.setAttribute('target', '_blank');
-    element.setAttribute('rel', 'noopener noreferrer');
-    return;
-  }
   if (tag === 'img') {
     // A hover that is glanced at and dismissed should cost one request, not many.
     element.setAttribute('loading', 'lazy');

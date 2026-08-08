@@ -63,6 +63,7 @@ CONTENT_SOURCES := \
 	$(SRC)/common/api.js \
 	$(SRC)/common/protocol.js \
 	$(SRC)/common/settings.js \
+	$(SRC)/common/refs.js \
 	$(SRC)/content/words.js \
 	$(SRC)/content/caret.js \
 	$(SRC)/content/sanitize.js \

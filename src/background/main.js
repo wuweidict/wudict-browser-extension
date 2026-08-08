@@ -282,6 +282,35 @@ function describeFetchFailure(error) {
   );
 }
 
+// ----------------------------------------------------------------------- tabs
+
+// One wudict tab that keeps being reused is far less annoying than twenty.
+let wudictTabId = null;
+
+async function openTab(url, reuse) {
+  const parsed = new URL(url);
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`refusing to open ${parsed.protocol}`);
+  }
+
+  if (reuse && wudictTabId !== null) {
+    try {
+      await api.tabs.update(wudictTabId, { url, active: true });
+      return;
+    } catch {
+      // Closed since we remembered it.
+      wudictTabId = null;
+    }
+  }
+
+  const tab = await api.tabs.create({ url });
+  if (reuse) wudictTabId = tab.id;
+}
+
+api.tabs?.onRemoved.addListener((tabId) => {
+  if (tabId === wudictTabId) wudictTabId = null;
+});
+
 // ----------------------------------------------------------------- diagnostics
 
 /** `await wudictSmoke()` in the background console. */
@@ -362,6 +391,13 @@ api.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'wudict:smoke') {
     smoke().then(sendResponse, (error) =>
       sendResponse({ ok: false, reason: 'exception', message: String(error) }),
+    );
+    return true;
+  }
+  if (message?.type === 'wudict:open') {
+    openTab(message.url, message.reuse === true).then(
+      () => sendResponse({ ok: true }),
+      (error) => sendResponse({ ok: false, message: error.message }),
     );
     return true;
   }

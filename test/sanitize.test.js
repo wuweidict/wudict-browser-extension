@@ -57,10 +57,17 @@ describe('resolveUrl — links', () => {
     assert.equal(resolveUrl('javascript:alert(1)', ORIGIN, 'a'), null);
   });
 
-  it('drops a fragment-only link', () => {
-    // Inside a shadow root this would navigate the host page — the same class of
-    // bug the contract describes for fragment links in a srcdoc iframe.
+  it('gives a fragment-only link no href', () => {
+    // It must not become a navigable href — inside a popup on someone else's page
+    // that navigates the host site. The original is preserved in data-ref and
+    // routed at click time, where it scrolls within the popup instead.
     assert.equal(resolveUrl('#sense2', ORIGIN, 'a'), null);
+  });
+
+  it('gives a bword:/entry:/bare cross-reference no href', () => {
+    // Same reason: these are not URLs at all. data-ref carries them.
+    assert.equal(resolveUrl('bword://run', ORIGIN, 'a'), null);
+    assert.equal(resolveUrl('d:run', ORIGIN, 'a'), null);
   });
 
   it('drops an empty or whitespace href', () => {

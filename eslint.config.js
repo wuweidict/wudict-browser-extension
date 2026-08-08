@@ -43,6 +43,8 @@ export default [
         Node: 'readonly',
         HTMLInputElement: 'readonly',
         HTMLTextAreaElement: 'readonly',
+        Audio: 'readonly',
+        IntersectionObserver: 'readonly',
       },
     },
     rules,
