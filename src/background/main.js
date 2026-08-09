@@ -1,3 +1,8 @@
+/**
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: agpl
+ */
+
 // Background worker (Chrome) / event page (Firefox).
 //
 // Holds the host permission, so its fetches are not subject to the host page's CORS

@@ -1,3 +1,8 @@
+/**
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: agpl
+ */
+
 // Importing article HTML into the popup.
 //
 // `format=clean` has already dropped scripts, styles, link/iframe/object/form, every

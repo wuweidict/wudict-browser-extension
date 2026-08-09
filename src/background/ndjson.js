@@ -1,3 +1,8 @@
+/**
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: agpl
+ */
+
 // NDJSON transport for /api/dicts and /api/search.
 //
 // The contract defines two unrelated failure shapes and warns that neither check

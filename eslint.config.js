@@ -1,3 +1,8 @@
+/**
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: agpl
+ */
+
 const shared = {
   globalThis: 'readonly',
   console: 'readonly',

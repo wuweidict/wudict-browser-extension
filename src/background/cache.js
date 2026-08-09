@@ -1,3 +1,8 @@
+/**
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: agpl
+ */
+
 // LRU for lookup results, shared by every tab.
 //
 // Keyed per *dictionary* rather than per request — `dict|mode|n|format|q` — so an

@@ -1,3 +1,8 @@
+/**
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: agpl
+ */
+
 // The content script <-> background port protocol.
 //
 // A one-shot `sendMessage` would force the worker to buffer the whole NDJSON stream

@@ -1,3 +1,8 @@
+/**
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: agpl
+ */
+
 // Locating the text node and offset under the pointer.
 //
 // Two APIs with the same job: `caretPositionFromPoint` is the standard (Firefox,

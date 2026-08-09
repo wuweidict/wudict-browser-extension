@@ -1,3 +1,8 @@
+/**
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: agpl
+ */
+
 // Concatenate the content-script ES modules into one classic script.
 //
 // MV3 content_scripts cannot be ES modules in either browser, and Firefox content

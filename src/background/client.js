@@ -1,3 +1,8 @@
+/**
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: agpl
+ */
+
 // The wudict HTTP client: the only place that knows the server's URL shape and
 // frame vocabulary.
 

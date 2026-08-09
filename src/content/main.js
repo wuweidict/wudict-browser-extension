@@ -1,3 +1,8 @@
+/**
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: agpl
+ */
+
 // Content script entry point.
 //
 // Detects the word under the pointer, asks the background to look it up, and renders

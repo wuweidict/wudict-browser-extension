@@ -427,3 +427,7 @@ release: clean check package checksums ## Full local release build (does not pub
 	@echo "        make crx-chrome             (signed crx, self-hosted)"
 	@echo "        make publish-firefox CONFIRM=yes"
 	@echo "        make publish-chrome CONFIRM=yes CWS_ITEM_ID=..."
+
+.PHONY: addlicense
+addlicense: ## Scan and add missing licenses
+	addlicense -l agpl -s=only -l agpl -v -ignore "node_modules/**" .

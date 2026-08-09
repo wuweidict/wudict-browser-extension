@@ -1,3 +1,8 @@
+/**
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: agpl
+ */
+
 import { api } from './api.js';
 
 // The contract is explicit that both the IP and the port are user-configurable, so

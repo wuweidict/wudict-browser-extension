@@ -1,3 +1,8 @@
+/**
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: agpl
+ */
+
 // The persisted /api/dicts registry.
 //
 // This is not a convenience: `begin.slots[].name` is the dictionary id repeated, so

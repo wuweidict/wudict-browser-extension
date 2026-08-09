@@ -1,3 +1,8 @@
+/**
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: agpl
+ */
+
 import assert from 'node:assert/strict';
 import { describe, it, before } from 'node:test';
 

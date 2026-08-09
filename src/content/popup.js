@@ -1,3 +1,8 @@
+/**
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: agpl
+ */
+
 // The popup: a closed shadow root on a single element, isolated from the host page.
 //
 // Isolation has three layers. `format=clean` removes scripts and styles at the

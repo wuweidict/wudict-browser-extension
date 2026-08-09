@@ -1,3 +1,8 @@
+/**
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: agpl
+ */
+
 // Classifying the links inside an article, and building wudict page URLs.
 //
 // Pure string logic so it can be unit-tested directly; the routing that acts on it

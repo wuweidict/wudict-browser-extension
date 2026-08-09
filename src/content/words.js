@@ -1,3 +1,8 @@
+/**
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: agpl
+ */
+
 // Word boundary detection and the lookup fallback chain.
 //
 // Pure string logic, deliberately free of DOM access so it can be unit-tested

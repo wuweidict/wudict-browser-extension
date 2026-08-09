@@ -1,3 +1,8 @@
+/**
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: agpl
+ */
+
 import { api } from '../common/api.js';
 import { CAP_FOR_MODE, defaultSelection, labelFor } from '../common/dicts.js';
 import { DEFAULTS, getSettings, normalizeBaseUrl, setSettings } from '../common/settings.js';

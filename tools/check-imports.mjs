@@ -1,3 +1,8 @@
+/**
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: agpl
+ */
+
 // Verify that every relative import in a built extension resolves to a real file,
 // and that manifest-referenced entry points exist.
 //
