@@ -3,7 +3,7 @@
 **wudict Hover** is a free browser extension — Chrome & Firefox — that shows dictionary definitions when you hover over a word. It reads from [**wudict**](https://github.com/wuweidict/wudict), a dictionary for MDict (.mdx), AARD2 (.slob), Babylon (.bgl), Stardict (.ifo), ABBYY Lingvo (.dsl) which must be running on your computer or another host on your local network.
 
 - **Works with:** Chrome ≥ 116, Firefox ≥ 128 (MV3)
-- **Needs:** a running [**wudict**](https://github.com/wuweidict/wudict server) — everything is fetched from **your machine, `http://127.0.0.1:6888`** (configurable). No cloud, no account, no tracking.
+- **Needs:** a running [**wudict** server](https://github.com/wuweidict/wudict) — everything is fetched from **your machine, `http://127.0.0.1:6888`** (configurable). No cloud, no account, no tracking.
 - **Free & open source:** no data collection, no analytics, no tracking, no profiling, no third-party cookies.
 - **Also needs (Firefox only):** one manual permission grant after install — see below.
 - **Current version:** v0.1.0
@@ -29,14 +29,14 @@
 |---|---|---|
 | 1 | Install the extension | Chrome: unpacked self-host or Web Store · Firefox: `.xpi` or self-host |
 | 2 | Firefox: grant access | `about:addons → wudict Hover → Permissions → http://127.0.0.1:6888/*`. Chrome grants it automatically. |
-| 3 | Start wudict | `wudict --port 6888` (or your usual setup) |
+| 3 | Start [**wudict**](https://github.com/wuweidict/wudict) | e.g. `wudict --dict-dir ~/MyDictionaries` |
 | 4 | Done | Hover any word, hold **Alt/Option** (default) |
 
 ---
 
 ## Quick start
 
-1. Start wudict.
+1. Start [**wudict**](https://github.com/wuweidict/wudict).
 2. Install the extension (above).
 3. Hover any word, keep holding **Alt**. The popup opens.
 4. Release Alt, move into the popup — it stays while your pointer is inside; leaving dismisses it after 400 ms. **Esc** dismisses instantly.
