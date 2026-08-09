@@ -13,11 +13,15 @@
 ## Install
 
 <p align="center">
-  <a href="https://chromewebstore.google.com/" style="display:inline-block;padding:12px 24px;margin:6px;border-radius:8px;background:#1a73e8;color:#fff;font-weight:600;text-decoration:none;">Add to Chrome — Chrome Web Store</a>
-  <a href="https://addons.mozilla.org/" style="display:inline-block;padding:12px 24px;margin:6px;border-radius:8px;background:#2c3e53;color:#fff;font-weight:600;text-decoration:none;">Add to Firefox — AMO</a>
+  <a href="https://chromewebstore.google.com/">
+    <img alt="Add to Chrome — Chrome Web Store" src="https://img.shields.io/badge/Add%20to%20Chrome-Chrome%20Web%20Store-1a73e8?style=for-the-badge&amp;logo=googlechrome&amp;logoColor=white">
+  </a>
+  <a href="https://addons.mozilla.org/">
+    <img alt="Add to Firefox — Firefox Add-ons" src="https://img.shields.io/badge/Add%20to%20Firefox-Firefox%20Add--ons-FF7139?style=for-the-badge&amp;logo=firefox&amp;logoColor=white">
+  </a>
 </p>
 
-> Store listing links are wired here at release. Until then, everything in §Dev installs and runs identically.
+> Store listing links are wired here at release — swap the `href`s and the badges keep rendering. Until then, everything in §Dev installs and runs identically.
 
 **Before you click:** make sure wudict is running — the extension is a frontend, not a dictionary by itself.
 
