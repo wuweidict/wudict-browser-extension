@@ -1,23 +1,23 @@
 # wudict Hover
 
-**wudict Hover** is a free browser extension — Chrome & Firefox — that shows dictionary definitions when you hover over a word, in a popup at the cursor. It reads from **wudict**, a dictionary server you run on your own machine.
+**wudict Hover** is a free browser extension — Chrome & Firefox — that shows dictionary definitions when you hover over a word. It reads from [**wudict**](https://github.com/wuweidict/wudict), a dictionary for MDict (.mdx), AARD2 (.slob), Babylon (.bgl), Stardict (.ifo), ABBYY Lingvo (.dsl) which must be running on your computer or another host on your local network.
 
 - **Works with:** Chrome ≥ 116, Firefox ≥ 128 (MV3)
-- **Needs:** a running wudict server — everything is fetched from **your machine, `http://127.0.0.1:6888`** (configurable). No cloud, no account, no tracking.
-- **Free & open source:** no data collection, no analytics, no tracking, no profiling, no third-party data.
+- **Needs:** a running [**wudict**](https://github.com/wuweidict/wudict server) — everything is fetched from **your machine, `http://127.0.0.1:6888`** (configurable). No cloud, no account, no tracking.
+- **Free & open source:** no data collection, no analytics, no tracking, no profiling, no third-party cookies.
 - **Also needs (Firefox only):** one manual permission grant after install — see below.
 - **Current version:** v0.1.0
 
 ---
 
 ## Install
-
 <p align="center">
   <a href="https://chromewebstore.google.com/">
-    <img alt="Add to Chrome — Chrome Web Store" src="https://img.shields.io/badge/Add%20to%20Chrome-Chrome%20Web%20Store-1a73e8?style=for-the-badge&amp;logo=googlechrome&amp;logoColor=white">
+    <img alt="Add to Chrome — Chrome Web Store" src="https://img.shields.io/badge/Add%20to%20Chrome-Chrome%20Web%20Store-1a73e8?style=for-the-badge&logo=googlechrome&logoColor=white" />
   </a>
+  &nbsp;&nbsp;
   <a href="https://addons.mozilla.org/">
-    <img alt="Add to Firefox — Firefox Add-ons" src="https://img.shields.io/badge/Add%20to%20Firefox-Firefox%20Add--ons-FF7139?style=for-the-badge&amp;logo=firefox&amp;logoColor=white">
+    <img alt="Add to Firefox — Firefox Add-ons" src="https://img.shields.io/badge/Add%20to%20Firefox-Firefox%20Add--ons-FF7139?style=for-the-badge&logo=firefox&logoColor=white" />
   </a>
 </p>
 
