@@ -63,12 +63,21 @@ CONTENT_SOURCES := \
 	$(SRC)/common/api.js \
 	$(SRC)/common/protocol.js \
 	$(SRC)/common/settings.js \
+	$(SRC)/common/state.js \
 	$(SRC)/common/refs.js \
 	$(SRC)/content/words.js \
 	$(SRC)/content/caret.js \
 	$(SRC)/content/sanitize.js \
 	$(SRC)/content/popup.js \
 	$(SRC)/content/main.js
+
+# Toolbar icons are generated, not checked in: Chrome will not accept an SVG in
+# `icons`, and eight hand-exported PNGs in two tints is exactly the kind of asset
+# that goes stale. See tools/make-icons.mjs.
+ICON_STATES := on off
+ICON_SIZES  := 16 32 48 128
+ICONS := $(foreach state,$(ICON_STATES),$(foreach size,$(ICON_SIZES),\
+	$(SRC)/icons/$(state)-$(size).png))
 
 CHROME_DIR  := $(DIST)/chrome
 FIREFOX_DIR := $(DIST)/firefox
@@ -171,7 +180,13 @@ $(ART):
 # One rule per flavour via a pattern: the tree is copied minus the flavour
 # manifests, then manifest.<flavour>.json is stamped with VERSION as manifest.json.
 # The output dir is removed first so a deleted source file cannot linger in dist.
-$(DIST)/%/.build-stamp: $(SOURCES) $(SRC)/manifest.%.json VERSION tools/bundle-content.mjs
+$(ICONS): tools/make-icons.mjs
+	@node tools/make-icons.mjs $(SRC)/icons
+
+.PHONY: icons
+icons: $(ICONS) ## Regenerate the toolbar icon set
+
+$(DIST)/%/.build-stamp: $(SOURCES) $(ICONS) $(SRC)/manifest.%.json VERSION tools/bundle-content.mjs
 	@rm -rf $(DIST)/$*
 	@mkdir -p $(DIST)/$*
 	@tar -cf - -C $(SRC) --exclude='manifest.*.json' --exclude='.DS_Store' \

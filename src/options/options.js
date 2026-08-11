@@ -5,7 +5,13 @@
 
 import { api } from '../common/api.js';
 import { CAP_FOR_MODE, defaultSelection, labelFor } from '../common/dicts.js';
-import { DEFAULTS, getSettings, normalizeBaseUrl, setSettings } from '../common/settings.js';
+import {
+  DEFAULTS,
+  getSettings,
+  normalizeBaseUrl,
+  setSettings,
+  withSiteRule,
+} from '../common/settings.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -17,6 +23,8 @@ const FIELDS = {
   resultsPerDict: 'number',
   maxCandidates: 'number',
   dictLimit: 'number',
+  searchTarget: 'text',
+  contextMenu: 'checkbox',
 };
 
 let settings = null;
@@ -151,6 +159,44 @@ $('auto').addEventListener('click', async () => {
   renderDicts();
 });
 
+// ----------------------------------------------------------------- site rules
+
+/**
+ * The paused-sites list is the only place an opt-out can be undone once the user
+ * has left that site — the toolbar switch can only reach the tab in front of them.
+ */
+function renderSites() {
+  const list = $('sites');
+  list.replaceChildren();
+
+  const hosts = Object.keys(settings.siteRules ?? {}).sort();
+  if (hosts.length === 0) {
+    list.append(note('No paused sites.'));
+    return;
+  }
+
+  for (const host of hosts) {
+    const item = document.createElement('li');
+    const row = document.createElement('label');
+
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = host;
+
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.textContent = 'Resume';
+    remove.addEventListener('click', async () => {
+      await save(withSiteRule(settings, host, true));
+      renderSites();
+    });
+
+    row.append(name, remove);
+    item.append(row);
+    list.append(item);
+  }
+}
+
 function renderDicts() {
   const list = $('dicts');
   list.replaceChildren();
@@ -235,7 +281,17 @@ async function init() {
   settings = await getSettings();
   for (const id of Object.keys(FIELDS)) writeField(id, settings[id] ?? DEFAULTS[id]);
   await refreshGrantButton();
+  renderSites();
   renderDicts();
+
+  // The toolbar panel and the icon menu write the same settings; a page left open
+  // must not keep showing what was true when it loaded.
+  api.storage.onChanged.addListener(async (_changes, areaName) => {
+    if (areaName !== 'sync') return;
+    settings = await getSettings();
+    for (const id of Object.keys(FIELDS)) writeField(id, settings[id] ?? DEFAULTS[id]);
+    renderSites();
+  });
   // Populate the list without forcing a network round trip if it is already stored.
   await loadRegistry(false);
 }

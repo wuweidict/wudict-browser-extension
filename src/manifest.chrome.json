@@ -21,9 +21,38 @@
     "open_in_tab": true
   },
   "action": {
-    "default_title": "wudict Hover — options"
+    "default_title": "wudict Hover",
+    "default_popup": "action/action.html",
+    "default_icon": {
+      "16": "icons/on-16.png",
+      "32": "icons/on-32.png",
+      "48": "icons/on-48.png",
+      "128": "icons/on-128.png"
+    }
   },
-  "permissions": ["storage"],
+  "icons": {
+    "16": "icons/on-16.png",
+    "32": "icons/on-32.png",
+    "48": "icons/on-48.png",
+    "128": "icons/on-128.png"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": { "default": "Alt+W" },
+      "description": "Open the wudict Hover panel"
+    },
+    "lookup-selection": {
+      "suggested_key": { "default": "Alt+Shift+W" },
+      "description": "Look up the selected text in wudict"
+    },
+    "toggle-enabled": {
+      "description": "Pause or resume hover lookup everywhere"
+    },
+    "toggle-site": {
+      "description": "Pause or resume hover lookup on this site"
+    }
+  },
+  "permissions": ["storage", "contextMenus"],
   "host_permissions": ["http://127.0.0.1:6888/*"],
   "optional_host_permissions": ["http://*/*", "https://*/*"]
 }

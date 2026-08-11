@@ -13,6 +13,7 @@
 import { api } from '../common/api.js';
 import { BEGIN, CANCEL, END, FAILED, HIT, LOOKUP, PORT_NAME } from '../common/protocol.js';
 import { getSettings, onSettingsChanged } from '../common/settings.js';
+import { activeOn } from '../common/state.js';
 import { samePosition, wordAtPoint } from './caret.js';
 import { candidates } from './words.js';
 import { createPopup } from './popup.js';
@@ -26,6 +27,8 @@ const HIDE_DELAY_MS = 400;
 
 const state = {
   settings: null,
+  // Both switches, resolved once per settings change rather than per mousemove.
+  active: false,
   port: null,
   lookupId: 0,
   activeId: null,
@@ -189,6 +192,10 @@ function modifierHeld(event) {
 }
 
 function startLookup(word) {
+  lookupTerm(word.term);
+}
+
+function lookupTerm(term) {
   state.lookupId += 1;
   state.activeId = state.lookupId;
   state.shownDicts = [];
@@ -196,7 +203,7 @@ function startLookup(word) {
   send({
     type: LOOKUP,
     id: state.activeId,
-    candidates: candidates(word.term, state.settings.maxCandidates),
+    candidates: candidates(term, state.settings.maxCandidates),
     n: state.settings.resultsPerDict,
     limit: state.settings.dictLimit,
     // Only when the user has chosen explicitly; otherwise the background picks
@@ -237,6 +244,68 @@ function updateMore() {
   popup.showMore(state.moreBusy ? 'searching…' : 'More dictionaries', !state.moreBusy);
 }
 
+// ------------------------------------------------------------------ selection
+
+/**
+ * The current selection, collapsed to one line.
+ *
+ * Read fresh on demand rather than tracked: by the time the context menu fires, the
+ * browser has already told us what was selected, and the keyboard command has no
+ * reason to have been listening beforehand.
+ */
+function selectedText() {
+  const selection = window.getSelection?.();
+  const text = selection?.toString() ?? '';
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+/** Anchor the popup below the selection, not at wherever the pointer last was. */
+function anchorAtSelection() {
+  const selection = window.getSelection?.();
+  if (!selection || selection.rangeCount === 0) return false;
+  const rect = selection.getRangeAt(0).getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) return false;
+  state.lastPointer = { x: rect.left + rect.width / 2, y: rect.bottom };
+  return true;
+}
+
+/**
+ * Show the hover popup for a term the user asked for explicitly.
+ *
+ * Deliberately ignores both switches: the user just picked this out of a menu, and
+ * "paused on this site" means "stop reacting to my pointer", not "refuse to work".
+ */
+async function showFor(term) {
+  if (!state.settings) state.settings = await getSettings();
+  if (!term) return false;
+  cancelHide();
+  clearHighlight();
+  anchorAtSelection();
+  state.lastWord = null;
+  lookupTerm(term);
+  return true;
+}
+
+api.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === 'wudict:selection') {
+    // Every frame in the tab receives this. Only the one that actually holds a
+    // selection answers, which is what makes the first reply the right reply — a
+    // frame that stays silent cannot win the race.
+    const term = selectedText();
+    if (!term) return false;
+    sendResponse({ term });
+    return false;
+  }
+  if (message?.type === 'wudict:showFor') {
+    showFor(message.term).then(
+      (ok) => sendResponse({ ok }),
+      () => sendResponse({ ok: false }),
+    );
+    return true;
+  }
+  return false;
+});
+
 function dismiss() {
   cancelHide();
   clearTimeout(state.debounceTimer);
@@ -258,7 +327,7 @@ function onPointerMove(event) {
 
   state.lastPointer = { x: event.clientX, y: event.clientY };
 
-  if (!state.settings?.enabled) return;
+  if (!state.active) return;
 
   if (!modifierHeld(event)) {
     // Released on the way to the popup is the common case, so this is a grace
@@ -304,7 +373,7 @@ function onKeyDown(event) {
     dismiss();
     return;
   }
-  if (!state.settings?.enabled || state.settings.modifier === 'none') return;
+  if (!state.active || state.settings.modifier === 'none') return;
   // Holding the modifier while the pointer is already parked must trigger a lookup;
   // without this the feature appears dead until the mouse is jiggled.
   if (modifierHeld(event)) schedule();
@@ -333,11 +402,29 @@ function onMouseDown(event) {
 
 async function start() {
   state.settings = await getSettings();
+  state.active = activeOn(state.settings, location.hostname);
 
   onSettingsChanged(async () => {
     state.settings = await getSettings();
-    if (!state.settings.enabled) dismiss();
+    state.active = activeOn(state.settings, location.hostname);
+    if (!state.active) dismiss();
   });
+
+  // Tell the worker where we are. This is how the toolbar icon knows which site it
+  // is reporting on without the extension asking for the "tabs" permission — see
+  // the tabHosts note in background/main.js. Top frame only; a subframe's host is
+  // not the tab's identity.
+  if (window.top === window) {
+    api.runtime
+      .sendMessage({ type: 'wudict:hello', url: location.href })
+      .catch(() => {});
+    // Restored from the back/forward cache: the worker may have forgotten the tab,
+    // or been replaced entirely, while this page sat frozen.
+    window.addEventListener('pageshow', (event) => {
+      if (!event.persisted) return;
+      api.runtime.sendMessage({ type: 'wudict:hello', url: location.href }).catch(() => {});
+    });
+  }
 
   document.addEventListener('mousemove', onPointerMove, { passive: true, capture: true });
   document.addEventListener('keydown', onKeyDown, { passive: true, capture: true });

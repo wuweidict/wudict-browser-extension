@@ -45,7 +45,42 @@ If not triggering: check the **Options** page → **Test connection**; and on Fi
 
 ---
 
-## Using it
+## Three ways to look something up
+
+Hover is the fast path, not the only one. Nothing here requires the others to be enabled.
+
+| Entry point | How | Where the answer opens |
+|---|---|---|
+| **Hover** | point at a word, hold **Alt** (configurable, or no key at all) | the in-page popup |
+| **Selection** | select text, right-click → **Look up "…" in wudict** — or **Alt+Shift+W** | the full wudict page, **all dictionaries** (configurable) |
+| **Toolbar** | click the icon → type in the search box — or **Alt+W** | same as selection |
+
+The selection menu exists for exactly the case where hover is unwanted: turn hover off entirely and the extension still works, with no key held and no pointer timing.
+
+### The toolbar icon
+
+Clicking the icon opens a panel, not the options page. It carries what changes often or is needed when something is wrong; everything else is one click away in its footer.
+
+- **Connection** — live: connected · *n* dictionaries, or **Cannot reach …** with **Retry**, and on Firefox a **Grant access** button that requests the host permission in place (see step 2 of Install)
+- **Search box** — opens the full wudict page for the word, all dictionaries
+- **Hold key** — the setting people actually change
+- **This site** — pause hover on this host without touching the master switch; the list of paused sites is on the options page
+
+The icon itself reports state before you click it: **coloured** when hover is live here, **grey** when paused globally or on this site, with an amber **!** badge when wudict cannot be reached. Hover the icon for the whole sentence.
+
+Right-clicking the icon adds **Pause on *host*** · **Test connection** · **Open wudict** · **Options** above the browser's own items.
+
+### Keyboard
+
+| Shortcut | Does |
+|---|---|
+| **Alt+W** | open the toolbar panel |
+| **Alt+Shift+W** | look up the current selection |
+| unassigned | pause/resume everywhere, pause/resume this site — bind in `chrome://extensions/shortcuts` or `about:addons → ⚙ → Manage Extension Shortcuts` |
+
+---
+
+## Using the hover popup
 
 The popup shows one entry per dictionary (up to 3 by default), streamed in as dictionaries answer — the fastest result paints first.
 
@@ -71,9 +106,12 @@ wudict does **no morphology**: `running` is found only if a dictionary stores it
 | Setting | Default | Notes |
 |---|---|---|
 | Base URL | `http://127.0.0.1:6888` | both host and port are configurable in wudict; **Test connection** verifies, **Grant access** (Firefox) requests the host permission |
-| Enabled | on | master switch |
-| Hold key | Alt/Option | or none, ctrl, shift, cmd/win |
+| Enabled | on | master switch (also in the toolbar panel) |
+| Hold key | Alt/Option | or none, ctrl, shift, cmd/win (also in the toolbar panel) |
 | Hover delay | 200 ms | debounce before lookup fires |
+| Search opens | full wudict page | where the toolbar search box, the right-click item and the shortcut land — the full page with **all dictionaries**, or the hover popup on the current page. Hover itself always uses the popup |
+| Right-click menu | on | show **Look up "…" in wudict** on selected text |
+| Paused sites | none | per-host opt-outs, added from the toolbar panel or the icon menu; resume them here once you have left the site |
 | Dictionaries per lookup | 3 | 1–8 |
 | Entries per dictionary | 1 | 1–10 (hover is glanceable; keep small) |
 | Fallback attempts | 4 | 1–8 |
@@ -85,7 +123,10 @@ wudict does **no morphology**: `running` is found only if a dictionary stores it
 
 | Symptom | Cause → fix |
 |---|---|
-| Nothing happens on hover | Modifier not held · disabled in options · wudict not running → **Options → Test connection** |
+| Nothing happens on hover | Modifier not held · paused globally or on this site · wudict not running → **click the toolbar icon**: the panel says which |
+| Grey icon | Paused — the panel's master switch or its **this site** switch |
+| Amber **!** on the icon | wudict is not reachable → panel → **Retry**, and on Firefox **Grant access** |
+| Right-click item missing | Turn it back on in **Options → Searching**; it never appears without a text selection |
 | Firefox: connection fails | Host permission not granted → options **Grant access**, or `about:addons → Permissions` |
 | Word shows nothing | Dictionary lacks the word (no morphology) → open the word in wudict to check |
 | Popup closes immediately | Pointer left it; or you scrolled the page (by design — reposition and it reopens) |

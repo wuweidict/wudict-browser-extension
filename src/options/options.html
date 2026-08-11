@@ -56,6 +56,37 @@
       </section>
 
       <section>
+        <h2>Searching</h2>
+        <label class="row">
+          <span>Search opens</span>
+          <select id="searchTarget">
+            <option value="page">The full wudict page — all dictionaries</option>
+            <option value="popup">The hover popup, on the current page</option>
+          </select>
+        </label>
+        <p class="hint">
+          Applies to the toolbar search box, the right-click <em>Look up in
+          wudict</em> item and the keyboard shortcut — not to hover, which always
+          uses the popup. The full page has every dictionary, an address bar and
+          history; the popup has three slots and no way out.
+        </p>
+        <label class="row">
+          <span>Right-click menu</span>
+          <input id="contextMenu" type="checkbox" />
+          <span class="unit">Show “Look up in wudict” on selected text</span>
+        </label>
+      </section>
+
+      <section>
+        <h2>Paused sites</h2>
+        <p class="hint">
+          Hover lookup is off on these. Pause and resume from the toolbar panel, the
+          icon’s right-click menu, or the keyboard shortcut.
+        </p>
+        <ul id="sites" class="dicts"></ul>
+      </section>
+
+      <section>
         <h2>Lookups</h2>
         <label class="row">
           <span>Dictionaries per lookup</span>

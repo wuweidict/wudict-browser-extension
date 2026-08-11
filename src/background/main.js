@@ -36,7 +36,9 @@ import {
   OUTCOME,
   PORT_NAME,
 } from '../common/protocol.js';
-import { getSettings } from '../common/settings.js';
+import { buildEntryUrl } from '../common/refs.js';
+import { getSettings, setSettings, withSiteRule } from '../common/settings.js';
+import { HEALTH, hostOf, toolbarState } from '../common/state.js';
 import { cacheKey, createCache } from './cache.js';
 import { droppedIds, fetchDicts, InvalidQueryError, search } from './client.js';
 import { WudictHttpError } from './ndjson.js';
@@ -45,6 +47,32 @@ const cache = createCache();
 
 let registry = null;
 let registryFetch = null;
+
+// ------------------------------------------------------------------- health
+
+// Whether wudict is reachable. Not polled: a background timer would wake the worker
+// forever to answer a question nobody is asking. It is set as a side effect of work
+// that already happens — every lookup is a probe — and refreshed on demand when the
+// popup opens.
+const health = { status: HEALTH.UNKNOWN, message: '', at: 0 };
+
+function setHealth(status, message = '') {
+  const changed = health.status !== status;
+  health.status = status;
+  health.message = message;
+  health.at = Date.now();
+  if (changed) void paintAllTabs();
+}
+
+/** Force a real request. `maxAgeMs` reuses a recent verdict instead. */
+async function probeHealth({ maxAgeMs = 0 } = {}) {
+  if (maxAgeMs > 0 && health.status !== HEALTH.UNKNOWN && Date.now() - health.at < maxAgeMs) {
+    return health;
+  }
+  const result = await smoke();
+  setHealth(result.ok ? HEALTH.OK : HEALTH.DOWN, result.message);
+  return health;
+}
 
 // ------------------------------------------------------------------- registry
 
@@ -165,11 +193,15 @@ async function runLookup(port, session, message) {
         append: message.append === true,
       });
       if (committed) {
+        // A result that came off the network proves the server answered; one served
+        // from cache proves nothing about right now.
+        if (!committed.fromCache) setHealth(HEALTH.OK);
         post({ type: END, id, term, matched: true, fromCache: committed.fromCache });
         return;
       }
     }
 
+    setHealth(HEALTH.OK);
     post({ type: END, id, term: null, matched: false, fromCache: false });
   } catch (error) {
     if (controller.signal.aborted || error.name === 'AbortError') return;
@@ -177,8 +209,11 @@ async function runLookup(port, session, message) {
     if (error instanceof InvalidQueryError) {
       post({ type: FAILED, id, reason: 'invalid', message: error.message });
     } else if (error instanceof WudictHttpError) {
+      // The server answered, so it is up; this query was the problem.
+      setHealth(HEALTH.OK);
       post({ type: FAILED, id, reason: 'http', status: error.status, message: error.message });
     } else {
+      setHealth(HEALTH.DOWN, describeFetchFailure(error));
       post({ type: FAILED, id, reason: 'blocked', message: describeFetchFailure(error) });
     }
   } finally {
@@ -314,7 +349,132 @@ async function openTab(url, reuse) {
 
 api.tabs?.onRemoved.addListener((tabId) => {
   if (tabId === wudictTabId) wudictTabId = null;
+  tabHosts.delete(tabId);
 });
+
+// ------------------------------------------------------------- per-tab state
+
+// tabId -> hostname, reported by the content script at document_idle.
+//
+// Reading `tab.url` instead would work and be simpler, and it is exactly what the
+// "tabs" permission exists to gate — an install-time warning about reading browsing
+// history, for a feature that only needs the host of the page the user is looking
+// at *right now*. The content script already runs there and already knows. This
+// costs one message and no permission.
+//
+// A tab with no entry is a page no content script could run on (browser settings,
+// the add-ons manager, the web store, a PDF viewer). That is a real state the UI
+// must show, not a lookup failure.
+const tabHosts = new Map();
+
+async function paintTab(tabId, host) {
+  if (!api.action?.setIcon) return;
+  const settings = await getSettings();
+  const view = toolbarState({
+    settings,
+    host: host === undefined ? (tabHosts.get(tabId) ?? null) : host,
+    health: health.status,
+    baseUrl: settings.baseUrl,
+  });
+
+  const path = {
+    16: `icons/${view.icon}-16.png`,
+    32: `icons/${view.icon}-32.png`,
+    48: `icons/${view.icon}-48.png`,
+    128: `icons/${view.icon}-128.png`,
+  };
+
+  // Every one of these rejects on a tab that closed mid-await, which is routine.
+  await Promise.all([
+    api.action.setIcon({ tabId, path }).catch(() => {}),
+    api.action.setTitle({ tabId, title: view.title }).catch(() => {}),
+    api.action.setBadgeText({ tabId, text: view.badge }).catch(() => {}),
+    view.badge
+      ? api.action
+          .setBadgeBackgroundColor({ tabId, color: view.badgeColour })
+          .catch(() => {})
+      : Promise.resolve(),
+  ]);
+}
+
+/** Repaint every tab we know about, plus whatever is on screen. */
+async function paintAllTabs() {
+  if (!api.tabs?.query) return;
+  try {
+    const tabs = await api.tabs.query({});
+    await Promise.all(tabs.map((tab) => (tab.id === undefined ? null : paintTab(tab.id))));
+  } catch {
+    // No tabs API access in this context; the icon simply keeps its last state.
+  }
+}
+
+async function activeTab() {
+  try {
+    const [tab] = await api.tabs.query({ active: true, currentWindow: true });
+    return tab ?? null;
+  } catch {
+    return null;
+  }
+}
+
+api.tabs?.onUpdated.addListener((tabId, changeInfo) => {
+  // A navigation invalidates the host until the new page's content script says
+  // otherwise. Without this, the icon keeps claiming the previous site's state.
+  if (changeInfo.status === 'loading') {
+    tabHosts.delete(tabId);
+    void paintTab(tabId, null);
+  }
+});
+
+api.tabs?.onActivated.addListener(({ tabId }) => void paintTab(tabId));
+
+// ------------------------------------------------------------------- searching
+
+/**
+ * A deliberate lookup: the toolbar search box, the selection context menu, or the
+ * keyboard command.
+ *
+ * `all` and the full page by default — a deliberate search is not a hover. The user
+ * has stopped reading and wants the entry, so the answer is the real wudict page
+ * with every dictionary, not three slots in a 380px panel. `searchTarget: 'popup'`
+ * opts into the hover renderer instead, which needs a live content script and so
+ * falls back to the page whenever there isn't one.
+ */
+async function runSearch(rawTerm, { tabId = null, frameId = 0, target = null } = {}) {
+  const term = normalizeTerm(rawTerm);
+  if (!term) return { ok: false, message: 'nothing to look up' };
+
+  const settings = await getSettings();
+  const where = target ?? settings.searchTarget;
+
+  if (where === 'popup' && tabId !== null) {
+    try {
+      // Addressed to one frame: broadcasting would open the popup in every iframe
+      // on the page at once.
+      const reply = await api.tabs.sendMessage(
+        tabId,
+        { type: 'wudict:showFor', term },
+        { frameId },
+      );
+      if (reply?.ok) return { ok: true, where: 'popup' };
+    } catch {
+      // No content script on this page (or it is still loading) — fall through.
+    }
+  }
+
+  await openTab(buildEntryUrl(settings.baseUrl, { q: term, mode: 'exact', dict: 'all' }), true);
+  return { ok: true, where: 'page' };
+}
+
+/**
+ * A selection can be a paragraph. wudict matches a headword, and a URL is not a
+ * transport for prose, so this collapses whitespace and caps the length well above
+ * any real headword and well below anything that would bloat the URL.
+ */
+function normalizeTerm(value) {
+  if (typeof value !== 'string') return '';
+  return value.replace(/\s+/g, ' ').trim().slice(0, 200);
+}
 
 // ----------------------------------------------------------------- diagnostics
 
@@ -372,30 +532,276 @@ globalThis.wudictStats = () => ({
 });
 globalThis.wudictClearCache = () => cache.clear();
 
-// ------------------------------------------------------------------- lifecycle
+// --------------------------------------------------------------- context menus
 
-api.action?.onClicked.addListener(() => api.runtime.openOptionsPage());
+// The selection menu is the third entry point, and the only one that needs neither
+// hover nor a held key: select, right-click, look up. It is what makes the
+// extension usable for someone who turns hover off entirely.
+const MENU = {
+  SELECTION: 'wudict-lookup-selection',
+  SITE: 'wudict-toggle-site',
+  TEST: 'wudict-test',
+  OPEN: 'wudict-open',
+  OPTIONS: 'wudict-options',
+};
+
+// Firefox exposes `menus`; both expose `contextMenus` under the contextMenus
+// permission.
+const menus = api.contextMenus ?? api.menus;
+
+async function buildMenus() {
+  if (!menus) return;
+
+  // Chrome calls the callback; Firefox ignores it and resolves a promise instead.
+  // Waiting on only one of the two hangs on the other browser, and the menu is
+  // never built.
+  await new Promise((resolve) => {
+    const pending = menus.removeAll(resolve);
+    if (pending?.then) pending.then(resolve, resolve);
+  });
+
+  const settings = await getSettings();
+
+  if (settings.contextMenu) {
+    // %s is the selection, substituted by the browser.
+    create({
+      id: MENU.SELECTION,
+      title: 'Look up "%s" in wudict',
+      contexts: ['selection'],
+    });
+  }
+
+  // The toolbar icon's own menu. The browser's items (Options, Pin, Manage) stay;
+  // these are added above them, and are the two or three things worth reaching
+  // without opening the panel first.
+  create({ id: MENU.SITE, title: 'Pause on this site', contexts: ['action'] });
+  create({ id: MENU.TEST, title: 'Test connection', contexts: ['action'] });
+  create({ id: MENU.OPEN, title: 'Open wudict', contexts: ['action'] });
+  create({ id: MENU.OPTIONS, title: 'Options', contexts: ['action'] });
+
+  await refreshSiteMenuItem();
+}
+
+/**
+ * Create one item, tolerating a context this browser does not know.
+ *
+ * `action` as a context is MV3-era; on a browser that rejects it the rest of the
+ * menu must still appear rather than the whole build aborting on the first item.
+ */
+function create(properties) {
+  try {
+    menus.create(properties, () => void api.runtime.lastError);
+  } catch (error) {
+    console.debug('[wudict] menu item skipped:', properties.id, error.message);
+  }
+}
+
+/** The site item is a verb, so its label has to track what it would do. */
+async function refreshSiteMenuItem() {
+  if (!menus) return;
+  const settings = await getSettings();
+  const tab = await activeTab();
+  const host = tab?.id === undefined ? null : (tabHosts.get(tab.id) ?? null);
+  const paused = host !== null && settings.siteRules?.[host] === false;
+
+  const title =
+    host === null ? 'Pause on this site' : paused ? `Resume on ${host}` : `Pause on ${host}`;
+
+  try {
+    await menus.update(MENU.SITE, { title, enabled: host !== null });
+  } catch {
+    // The item does not exist yet, or this browser refused the action context.
+  }
+}
+
+menus?.onClicked.addListener((info, tab) => {
+  void handleMenuClick(info, tab);
+});
+
+async function handleMenuClick(info, tab) {
+  switch (info.menuItemId) {
+    case MENU.SELECTION:
+      // info.frameId is the frame the selection is in, which is the frame the popup
+      // has to open in if the user chose the popup target.
+      await runSearch(info.selectionText, {
+        tabId: tab?.id ?? null,
+        frameId: info.frameId ?? 0,
+      });
+      break;
+    case MENU.SITE:
+      await toggleSite(tab?.id ?? null);
+      break;
+    case MENU.TEST:
+      await probeHealth();
+      break;
+    case MENU.OPEN: {
+      const { baseUrl } = await getSettings();
+      await openTab(baseUrl, true);
+      break;
+    }
+    case MENU.OPTIONS:
+      api.runtime.openOptionsPage();
+      break;
+    default:
+      break;
+  }
+}
+
+async function toggleSite(tabId) {
+  const host = tabId === null ? null : (tabHosts.get(tabId) ?? null);
+  if (host === null) return { ok: false, message: 'this page has no host' };
+
+  const settings = await getSettings();
+  const paused = settings.siteRules?.[host] === false;
+  await setSettings(withSiteRule(settings, host, paused));
+  return { ok: true, host, enabled: paused };
+}
+
+// ------------------------------------------------------------------- commands
+
+api.commands?.onCommand.addListener((command) => {
+  void handleCommand(command);
+});
+
+async function handleCommand(command) {
+  const tab = await activeTab();
+  switch (command) {
+    case 'toggle-enabled': {
+      const settings = await getSettings();
+      await setSettings({ enabled: !settings.enabled });
+      break;
+    }
+    case 'toggle-site':
+      await toggleSite(tab?.id ?? null);
+      break;
+    case 'lookup-selection': {
+      // The selection lives in the page, so the content script has to hand it over.
+      if (tab?.id === undefined) break;
+      try {
+        const reply = await api.tabs.sendMessage(tab.id, { type: 'wudict:selection' });
+        if (reply?.term) await runSearch(reply.term, { tabId: tab.id });
+      } catch {
+        // No content script here; nothing to look up.
+      }
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+// ------------------------------------------------------------------- lifecycle
 
 // Bootstrap the registry once, so the first hover does not pay for it. Never polled.
 api.runtime.onInstalled.addListener(() => void bootstrap('onInstalled'));
 api.runtime.onStartup.addListener(() => void bootstrap('onStartup'));
 
 async function bootstrap(trigger) {
+  await buildMenus();
   try {
     const { baseUrl } = await getSettings();
     const next = await ensureRegistry(baseUrl);
+    setHealth(HEALTH.OK);
     console.info(`[wudict] ${trigger}: registry ready, ${next.dicts.length} dictionaries`);
   } catch (error) {
+    setHealth(HEALTH.DOWN, describeFetchFailure(error));
     console.warn(`[wudict] ${trigger}: registry unavailable — ${error.message}`);
   }
+  await paintAllTabs();
 }
 
-// Used by the options page. A context does not receive its own messages, so this is
-// not what the background console uses.
-api.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+// A settings change can flip every one of the three facts the icon reports, and the
+// menu label with them.
+api.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'sync') return;
+  if (changes.contextMenu) void buildMenus();
+  else void refreshSiteMenuItem();
+  void paintAllTabs();
+  // A new base URL says nothing about whether the old one was reachable.
+  if (changes.baseUrl) setHealth(HEALTH.UNKNOWN);
+});
+
+// The worker is torn down when idle and rebuilt on the next event, at which point
+// the menus it created are gone in Chrome but its module scope is fresh. Building
+// them here rather than only in onInstalled is what keeps them from disappearing.
+void buildMenus();
+
+// Used by the options page, the toolbar panel and the content script. A context
+// does not receive its own messages, so this is not what the background console
+// uses.
+api.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // The content script announcing where it is running. Top frame only: an ad iframe
+  // must not get to claim the tab's identity.
+  if (message?.type === 'wudict:hello') {
+    const tabId = sender?.tab?.id;
+    if (tabId !== undefined && (sender.frameId ?? 0) === 0) {
+      const host = hostOf(message.url) ?? hostOf(sender.tab?.url ?? '');
+      if (host) tabHosts.set(tabId, host);
+      else tabHosts.delete(tabId);
+      void paintTab(tabId, host);
+      void refreshSiteMenuItem();
+    }
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  // Everything the toolbar panel paints, in one round trip: it opens, renders, and
+  // has nothing to chase.
+  if (message?.type === 'wudict:state') {
+    (async () => {
+      const settings = await getSettings();
+      const tab = await activeTab();
+      const host = tab?.id === undefined ? null : (tabHosts.get(tab.id) ?? null);
+      // A stale verdict from minutes ago is worse than none: the panel exists to
+      // tell the user whether it works *now*.
+      if (message.probe) await probeHealth({ maxAgeMs: 15000 });
+      return {
+        ok: true,
+        settings,
+        host,
+        tabId: tab?.id ?? null,
+        health: { status: health.status, message: health.message, at: health.at },
+        dicts: registry?.dicts?.length ?? null,
+        view: toolbarState({
+          settings,
+          host,
+          health: health.status,
+          baseUrl: settings.baseUrl,
+        }),
+      };
+    })().then(sendResponse, (error) => sendResponse({ ok: false, message: String(error) }));
+    return true;
+  }
+
+  if (message?.type === 'wudict:search') {
+    runSearch(message.term, { tabId: message.tabId ?? null, target: message.target ?? null }).then(
+      sendResponse,
+      (error) => sendResponse({ ok: false, message: error.message }),
+    );
+    return true;
+  }
+
+  if (message?.type === 'wudict:toggleSite') {
+    toggleSite(message.tabId ?? null).then(sendResponse, (error) =>
+      sendResponse({ ok: false, message: error.message }),
+    );
+    return true;
+  }
+
+  if (message?.type === 'wudict:probe') {
+    probeHealth()
+      .then((result) => sendResponse({ ok: result.status === HEALTH.OK, ...result }))
+      .catch((error) => sendResponse({ ok: false, message: String(error) }));
+    return true;
+  }
+
   if (message?.type === 'wudict:smoke') {
-    smoke().then(sendResponse, (error) =>
-      sendResponse({ ok: false, reason: 'exception', message: String(error) }),
+    smoke().then(
+      (result) => {
+        setHealth(result.ok ? HEALTH.OK : HEALTH.DOWN, result.message);
+        sendResponse(result);
+      },
+      (error) => sendResponse({ ok: false, reason: 'exception', message: String(error) }),
     );
     return true;
   }

@@ -1,0 +1,72 @@
+<!doctype html>
+<!--
+ Copyright 2026 Google LLC
+ SPDX-License-Identifier: agpl
+-->
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>wudict Hover</title>
+    <link rel="stylesheet" href="action.css" />
+  </head>
+  <body>
+    <header>
+      <span class="brand">wudict Hover</span>
+      <label class="switch" title="Hover lookup, everywhere">
+        <input id="enabled" type="checkbox" />
+        <span class="track" aria-hidden="true"></span>
+      </label>
+    </header>
+
+    <section class="health">
+      <span id="dot" class="dot"></span>
+      <span id="healthText" class="health-text">Checking…</span>
+      <button id="grant" type="button" class="link" hidden>Grant access</button>
+      <button id="retry" type="button" class="link">Retry</button>
+    </section>
+
+    <section class="search">
+      <form id="searchForm">
+        <input
+          id="term"
+          type="search"
+          placeholder="Look up a word…"
+          autocomplete="off"
+          spellcheck="false"
+          autofocus
+        />
+        <button type="submit" title="Search all dictionaries">
+          <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+            <circle cx="7" cy="7" r="4.4" fill="none" stroke="currentColor" stroke-width="1.6" />
+            <path d="M10.3 10.3 14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+          </svg>
+        </button>
+      </form>
+      <p id="searchHint" class="hint"></p>
+    </section>
+
+    <section class="controls">
+      <div class="row">
+        <span class="label">Hold key</span>
+        <div id="modifier" class="segmented" role="radiogroup" aria-label="Hold key"></div>
+      </div>
+      <label class="row" id="siteRow">
+        <span class="label" id="siteLabel">This site</span>
+        <span class="spacer"></span>
+        <span class="switch">
+          <input id="site" type="checkbox" />
+          <span class="track" aria-hidden="true"></span>
+        </span>
+      </label>
+    </section>
+
+    <footer>
+      <button id="openWudict" type="button" class="link">Open wudict ↗</button>
+      <span class="spacer"></span>
+      <button id="options" type="button" class="link">Options…</button>
+    </footer>
+
+    <script type="module" src="action.js"></script>
+  </body>
+</html>

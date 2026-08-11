@@ -41,6 +41,7 @@ export default [
         browser: 'readonly',
         document: 'readonly',
         window: 'readonly',
+        location: 'readonly',
         CSS: 'readonly',
         Highlight: 'readonly',
         Range: 'readonly',

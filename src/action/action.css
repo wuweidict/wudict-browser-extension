@@ -1,0 +1,284 @@
+/**
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: agpl
+ */
+
+/* Tokens are the options page's, so the two never drift apart in a dark theme. */
+:root {
+  color-scheme: light dark;
+  --fg: #1a1a1a;
+  --bg: #ffffff;
+  --muted: #666;
+  --line: rgba(0, 0, 0, 0.14);
+  --raise: rgba(0, 0, 0, 0.04);
+  --accent: #0b5cad;
+  --ok: #1a7f37;
+  --warn: #b26a00;
+  --bad: #a12;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #e8e6e0;
+    --bg: #1c1c1a;
+    --muted: #9a978f;
+    --line: rgba(255, 255, 255, 0.16);
+    --raise: rgba(255, 255, 255, 0.06);
+    --accent: #7ab8ff;
+    --ok: #4ac26b;
+    --warn: #e0a24a;
+    --bad: #ff7b72;
+  }
+}
+
+body {
+  /* Firefox sizes the panel from the document; 340 is wide enough for a hostname
+     and narrow enough not to look like a window. */
+  width: 340px;
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font:
+    13px/1.45 -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+}
+
+header,
+section,
+footer {
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 0;
+}
+
+.brand {
+  font-weight: 600;
+  flex: 1 1 auto;
+}
+
+/* ------------------------------------------------------------------- health */
+
+.health {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.dot.ok {
+  background: var(--ok);
+}
+
+.dot.down {
+  background: var(--warn);
+}
+
+.health-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  /* A fetch failure message is a paragraph; the panel is not. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.health-text.bad {
+  color: var(--bad);
+}
+
+/* ------------------------------------------------------------------- search */
+
+form {
+  display: flex;
+  gap: 6px;
+}
+
+input[type='search'] {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  color: inherit;
+  background: var(--raise);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 9px;
+}
+
+input[type='search']:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+form button {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+form button:hover {
+  border-color: var(--accent);
+}
+
+.hint {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* ----------------------------------------------------------------- controls */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+}
+
+.row + .row {
+  margin-top: 8px;
+}
+
+.label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+.segmented {
+  display: flex;
+  margin-left: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.segmented button {
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg);
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--line);
+  padding: 3px 9px;
+  cursor: pointer;
+}
+
+.segmented button:first-child {
+  border-left: 0;
+}
+
+.segmented button[aria-checked='true'] {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* A checkbox drawn as a switch: the control is a state, not a form field, and it
+   has to read as on/off at a glance from three feet away. */
+.switch {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.switch input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.track {
+  width: 34px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--line);
+  transition: background 120ms ease;
+}
+
+.track::after {
+  content: '';
+  display: block;
+  width: 16px;
+  height: 16px;
+  margin: 2px;
+  border-radius: 50%;
+  background: var(--bg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: transform 120ms ease;
+}
+
+.switch input:checked + .track {
+  background: var(--accent);
+}
+
+.switch input:checked + .track::after {
+  transform: translateX(14px);
+}
+
+.switch input:focus-visible + .track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.switch input:disabled + .track {
+  opacity: 0.45;
+}
+
+/* ------------------------------------------------------------------- footer */
+
+footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.link {
+  font: inherit;
+  font-size: 12px;
+  color: var(--accent);
+  background: transparent;
+  border: 0;
+  padding: 2px 0;
+  cursor: pointer;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.link[hidden] {
+  display: none;
+}
+
+[disabled] {
+  cursor: default;
+  opacity: 0.5;
+}
