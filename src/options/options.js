@@ -5,6 +5,7 @@
 
 import { api } from '../common/api.js';
 import { CAP_FOR_MODE, defaultSelection, labelFor } from '../common/dicts.js';
+import { detectOs, foreignNote, keyChoices, OS } from '../common/keys.js';
 import {
   DEFAULTS,
   getSettings,
@@ -29,6 +30,34 @@ const FIELDS = {
 
 let settings = null;
 let registry = null;
+let os = OS.LINUX;
+
+// ----------------------------------------------------------------- modifiers
+
+/**
+ * The hold-key list, named for this platform.
+ *
+ * Rebuilt on every render rather than written once: the selected value can change
+ * from the toolbar panel, and a value synced from another platform adds an entry
+ * that would otherwise have nowhere to appear.
+ */
+function renderModifier() {
+  const select = $('modifier');
+  select.replaceChildren();
+
+  const choices = keyChoices(os, settings.modifier);
+  for (const choice of choices) {
+    const option = document.createElement('option');
+    option.value = choice.value;
+    option.textContent = choice.foreign ? `${choice.long} — not available here` : choice.long;
+    option.selected = choice.value === settings.modifier;
+    select.append(option);
+  }
+
+  const note = choices.some((choice) => choice.foreign) ? foreignNote(os, settings.modifier) : null;
+  $('modifierNote').textContent = note ?? '';
+  $('modifierNote').hidden = note === null;
+}
 
 // ------------------------------------------------------------------ permission
 
@@ -110,6 +139,9 @@ for (const id of Object.keys(FIELDS)) {
     await save({ [id]: value });
     // Normalisation may have clamped it; show what was actually stored.
     writeField(id, settings[id]);
+
+    // Moving off a key this platform cannot deliver has to remove it from the list.
+    if (id === 'modifier') renderModifier();
 
     if (id === 'baseUrl') {
       // Ids derive from the server's paths, so a different server means a
@@ -279,6 +311,10 @@ function setStatus(element, message, ok) {
 
 async function init() {
   settings = await getSettings();
+  os = await detectOs(api);
+  // The <select> is empty in the markup, so its options must exist before the
+  // generic field writer tries to assign one.
+  renderModifier();
   for (const id of Object.keys(FIELDS)) writeField(id, settings[id] ?? DEFAULTS[id]);
   await refreshGrantButton();
   renderSites();
@@ -289,6 +325,7 @@ async function init() {
   api.storage.onChanged.addListener(async (_changes, areaName) => {
     if (areaName !== 'sync') return;
     settings = await getSettings();
+    renderModifier();
     for (const id of Object.keys(FIELDS)) writeField(id, settings[id] ?? DEFAULTS[id]);
     renderSites();
   });

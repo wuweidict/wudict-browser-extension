@@ -199,6 +199,21 @@ form button:hover {
   color: #fff;
 }
 
+/* A key this platform will never deliver, inherited from another machine. It has
+   to look like the exception it is, not like a fifth ordinary choice. */
+.segmented button.foreign {
+  color: var(--warn);
+}
+
+.segmented button.foreign[aria-checked='true'] {
+  background: var(--warn);
+  color: #fff;
+}
+
+#modifierNote {
+  color: var(--warn);
+}
+
 /* A checkbox drawn as a switch: the control is a state, not a form field, and it
    has to read as on/off at a glance from three feet away. */
 .switch {

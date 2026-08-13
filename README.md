@@ -107,7 +107,7 @@ wudict does **no morphology**: `running` is found only if a dictionary stores it
 |---|---|---|
 | Base URL | `http://127.0.0.1:6888` | both host and port are configurable in wudict; **Test connection** verifies, **Grant access** (Firefox) requests the host permission |
 | Enabled | on | master switch (also in the toolbar panel) |
-| Hold key | Alt/Option | or none, ctrl, shift, cmd/win (also in the toolbar panel) |
+| Hold key | Option / Alt | also in the toolbar panel; named for the machine you are on — ⌥ Option, ⌃ Control, ⇧ Shift, ⌘ Command on macOS, Alt/Ctrl/Shift elsewhere. Command is offered on macOS only: Windows and most Linux desktops take that key before the page sees it. A setting synced in from a Mac is still shown, flagged, and never rewritten behind your back |
 | Hover delay | 200 ms | debounce before lookup fires |
 | Search opens | full wudict page | where the toolbar search box, the right-click item and the shortcut land — the full page with **all dictionaries**, or the hover popup on the current page. Hover itself always uses the popup |
 | Right-click menu | on | show **Look up "…" in wudict** on selected text |

@@ -40,14 +40,11 @@
         </label>
         <label class="row">
           <span>Hold key</span>
-          <select id="modifier">
-            <option value="none">No key — hover alone</option>
-            <option value="alt">Alt / Option</option>
-            <option value="ctrl">Control</option>
-            <option value="shift">Shift</option>
-            <option value="meta">Command / Windows</option>
-          </select>
+          <!-- Filled in by options.js: the names differ per platform, and the
+               Windows/Super key is not offered because the OS takes it first. -->
+          <select id="modifier"></select>
         </label>
+        <p id="modifierNote" class="hint bad" hidden></p>
         <label class="row">
           <span>Hover delay</span>
           <input id="debounceMs" type="number" min="0" max="2000" step="10" />

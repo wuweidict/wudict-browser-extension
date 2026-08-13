@@ -15,20 +15,16 @@
 // state in one message and paints that, so it cannot disagree with the icon.
 
 import { api } from '../common/api.js';
-import { MODIFIERS, setSettings } from '../common/settings.js';
+import { detectOs, foreignNote, keyChoices, OS } from '../common/keys.js';
+import { setSettings } from '../common/settings.js';
 import { HEALTH } from '../common/state.js';
 
 const $ = (id) => document.getElementById(id);
 
-const MODIFIER_LABELS = {
-  none: 'None',
-  alt: 'Alt',
-  ctrl: 'Ctrl',
-  shift: 'Shift',
-  meta: 'Cmd',
-};
-
 let state = null;
+// Resolved once before the first paint. The key names are wrong on two platforms
+// out of three without it, so it is worth the one await.
+let os = OS.LINUX;
 
 // ------------------------------------------------------------------- plumbing
 
@@ -97,15 +93,29 @@ function setHealth(kind, text) {
 function renderModifier(current) {
   const group = $('modifier');
   group.replaceChildren();
-  for (const modifier of MODIFIERS) {
+
+  const choices = keyChoices(os, current);
+  for (const choice of choices) {
     const button = document.createElement('button');
     button.type = 'button';
     button.role = 'radio';
-    button.textContent = MODIFIER_LABELS[modifier] ?? modifier;
-    button.setAttribute('aria-checked', String(modifier === current));
-    button.addEventListener('click', () => patch({ modifier }));
+    // Symbols on macOS, words elsewhere — the label is short by platform, the
+    // accessible name is always the full one.
+    button.textContent = choice.short;
+    button.setAttribute('aria-label', choice.name);
+    button.title = choice.name;
+    button.setAttribute('aria-checked', String(choice.value === current));
+    if (choice.foreign) button.classList.add('foreign');
+    button.addEventListener('click', () => patch({ modifier: choice.value }));
     group.append(button);
   }
+
+  // A key this platform cannot deliver, arrived over storage.sync from another
+  // machine. Explained rather than silently rewritten: the stored value is shared,
+  // and whichever computer was opened last must not get to reconfigure the others.
+  const note = choices.some((choice) => choice.foreign) ? foreignNote(os, current) : null;
+  $('modifierNote').textContent = note ?? '';
+  $('modifierNote').hidden = note === null;
 }
 
 function renderSite(host, enabled, masterEnabled) {
@@ -212,4 +222,7 @@ $('options').addEventListener('click', () => {
 
 // A probe on open is the point of the panel: a verdict from ten minutes ago is not
 // an answer to "does it work now".
-load({ probe: true });
+(async () => {
+  os = await detectOs(api);
+  await load({ probe: true });
+})();
