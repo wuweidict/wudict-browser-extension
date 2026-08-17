@@ -35,6 +35,30 @@
 // remaining hits stream live. If no candidate produces results, the only message is
 // END with `matched: false` and no popup is ever shown.
 
+// MEDIA AND AUDIO. These are one-shot `runtime.sendMessage` calls, not port frames:
+// each is one request with one answer, asked at times unrelated to a lookup (a slot
+// scrolling into view, a speaker icon clicked).
+//
+// They exist because nothing on the server's origin may appear as a URL in the host
+// page's DOM — such a request would be the *page's*, and the browser would ask the
+// user whether the site they are reading may reach their local network (D69). Media
+// arrives as bytes and becomes a blob URL in the popup; audio never reaches the page
+// at all.
+//
+//   { type: MEDIA_GET, url }  -> { ok: true, mime, b64 } | { ok: false, message }
+//   { type: AUDIO_PLAY, url } -> { ok } (offscreen document, or the background page)
+//   { type: AUDIO_STOP }      -> { ok }
+
+export const MEDIA_GET = 'wudict:media';
+export const AUDIO_PLAY = 'wudict:audio';
+export const AUDIO_STOP = 'wudict:audioStop';
+
+// Chrome's offscreen document shares the extension's message bus with every other
+// extension page, so its messages carry a target as well as a type.
+export const OFFSCREEN_TARGET = 'wudict-offscreen';
+export const OFFSCREEN_PLAY = 'wudict:offscreen-play';
+export const OFFSCREEN_STOP = 'wudict:offscreen-stop';
+
 export const PORT_NAME = 'wudict';
 
 export const LOOKUP = 'lookup';

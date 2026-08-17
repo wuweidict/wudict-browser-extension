@@ -235,6 +235,12 @@ validate-chrome: build-chrome ## Sanity-check the built Chrome manifest
 		|| { echo "  version not stamped to $(VERSION)"; exit 1; }
 	@jq -e '.background.service_worker' $(CHROME_DIR)/manifest.json >/dev/null \
 		|| { echo "  Chrome MV3 needs background.service_worker"; exit 1; }
+	@jq -e '(.key | type) == "string" and (.key | length) > 300' $(CHROME_DIR)/manifest.json >/dev/null \
+		|| { echo "  manifest.key missing — the unpacked extension id would drift per install"; exit 1; }
+	@jq -e 'has("host_permissions") | not' $(CHROME_DIR)/manifest.json >/dev/null \
+		|| { echo "  host_permissions must stay absent (D69: no loopback URL reaches the page)"; exit 1; }
+	@jq -e '.permissions | index("offscreen")' $(CHROME_DIR)/manifest.json >/dev/null \
+		|| { echo "  the offscreen permission is what keeps audio out of the page"; exit 1; }
 	@node tools/check-imports.mjs $(CHROME_DIR)
 	@echo "  chrome manifest ok"
 
@@ -245,6 +251,8 @@ validate-firefox: build-firefox ## Validate the Firefox build with web-ext lint
 		|| { echo "  Firefox MV3 needs background.scripts, not service_worker"; exit 1; }
 	@jq -e '.browser_specific_settings.gecko.id' $(FIREFOX_DIR)/manifest.json >/dev/null \
 		|| { echo "  browser_specific_settings.gecko.id is required for signing"; exit 1; }
+	@jq -e 'has("host_permissions") | not' $(FIREFOX_DIR)/manifest.json >/dev/null \
+		|| { echo "  host_permissions must stay absent (D69: no loopback URL reaches the page)"; exit 1; }
 	@node tools/check-imports.mjs $(FIREFOX_DIR)
 	@if [ -x "$(WEB_EXT)" ]; then $(WEB_EXT) lint --source-dir $(FIREFOX_DIR) --self-hosted; \
 	else echo "  web-ext not installed — run 'make deps' (skipping lint)"; fi

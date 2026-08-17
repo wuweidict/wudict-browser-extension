@@ -117,7 +117,8 @@ const ALLOWED_ATTRIBUTES = {
   time: ['datetime'],
 };
 
-// Resolved separately, because they decide what the page is allowed to fetch.
+// Resolved separately, because they decide what is fetched and by whom. Media on the
+// wudict origin never becomes a `src` here — see copyAttributes.
 const URL_ATTRIBUTES = { a: 'href', img: 'src', audio: 'src', source: 'src' };
 
 /**
@@ -179,7 +180,15 @@ function copyAttributes(element, source, tag, serverOrigin) {
   if (raw === null) return;
 
   const resolved = resolveUrl(raw, serverOrigin, tag);
-  if (resolved !== null) element.setAttribute(urlAttribute, resolved);
+  if (resolved === null) return;
+
+  // An inline image costs no request and is nobody's client, so it is set directly.
+  // Anything on the wudict origin is parked in `data-wd-src` for the popup to
+  // hydrate through the background: a loopback URL in this page's DOM would make
+  // *the page* the one reaching the local network, and the browser would prompt the
+  // user about the site they are reading (D69).
+  if (resolved.startsWith('data:')) element.setAttribute(urlAttribute, resolved);
+  else element.setAttribute('data-wd-src', resolved);
 }
 
 /**

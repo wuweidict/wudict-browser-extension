@@ -53,6 +53,11 @@ const entryPoints = [
   ...(manifest.content_scripts ?? []).flatMap((cs) => [...(cs.js ?? []), ...(cs.css ?? [])]),
   manifest.options_ui?.page,
   manifest.action?.default_popup,
+  // Named by no manifest field: the background opens it through
+  // `offscreen.createDocument({url})`, so a rename would fail only at the moment a
+  // user clicks the speaker button. Checked here on the Chrome build alone —
+  // Firefox's background is a real page and plays the audio itself.
+  manifest.permissions?.includes('offscreen') ? 'offscreen/offscreen.html' : null,
 ].filter(Boolean);
 
 for (const entry of entryPoints) {

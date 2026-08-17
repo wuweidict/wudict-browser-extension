@@ -5,7 +5,7 @@
 - **Works with:** Chrome ≥ 116, Firefox ≥ 128 (MV3)
 - **Needs:** a running [**wudict** server](https://github.com/wuweidict/wudict) — everything is fetched from **your machine, `http://127.0.0.1:6888`** (configurable). No cloud, no account, no tracking.
 - **Free & open source:** no data collection, no analytics, no tracking, no profiling, no third-party cookies.
-- **Also needs (Firefox only):** one manual permission grant after install — see below.
+- **Asks for nothing:** the install prompt names no site and no host. The extension holds no permission to reach `127.0.0.1` — wudict answers it by name instead (see *How it works*), so your browser never asks whether *the page you are reading* may talk to your local network.
 - **Current version:** v0.1.0
 
 ---
@@ -27,10 +27,9 @@
 
 | Step | What happens | Details |
 |---|---|---|
-| 1 | Install the extension | Chrome: unpacked self-host or Web Store · Firefox: `.xpi` or self-host |
-| 2 | Firefox: grant access | `about:addons → wudict Hover → Permissions → http://127.0.0.1:6888/*`. Chrome grants it automatically. |
-| 3 | Start [**wudict**](https://github.com/wuweidict/wudict) | e.g. `wudict --dict-dir ~/MyDictionaries` |
-| 4 | Done | Hover any word, hold **Alt/Option** (default) |
+| 1 | Install the extension | Chrome: unpacked self-host or Web Store · Firefox: `.xpi` or self-host. No permission prompt: there is nothing to grant |
+| 2 | Start [**wudict**](https://github.com/wuweidict/wudict) | e.g. `wudict --dict-dir ~/MyDictionaries` — it must be a build that answers extensions (the one this release ships with) |
+| 3 | Done | Hover any word, hold **Alt/Option** (default) |
 
 ---
 
@@ -41,7 +40,7 @@
 3. Hover any word, keep holding **Alt**. The popup opens.
 4. Release Alt, move into the popup — it stays while your pointer is inside; leaving dismisses it after 400 ms. **Esc** dismisses instantly.
 
-If not triggering: check the **Options** page → **Test connection**; and on Firefox, the permission grant in step 2.
+If not triggering: **Options → Test connection** says which of the three things is wrong — nothing listening, a wudict too old to answer extensions, or a working connection and a hover setting.
 
 ---
 
@@ -61,7 +60,7 @@ The selection menu exists for exactly the case where hover is unwanted: turn hov
 
 Clicking the icon opens a panel, not the options page. It carries what changes often or is needed when something is wrong; everything else is one click away in its footer.
 
-- **Connection** — live: connected · *n* dictionaries, or **Cannot reach …** with **Retry**, and on Firefox a **Grant access** button that requests the host permission in place (see step 2 of Install)
+- **Connection** — live: connected · *n* dictionaries, or the failure named for what it is — **Cannot reach …** (nothing listening) or **… is not answering extensions** (a wudict older than this release) — with **Retry**, and, only in that second case, a **Grant access** button that switches to the host-permission fallback in place
 - **Search box** — opens the full wudict page for the word, all dictionaries
 - **Hold key** — the setting people actually change
 - **This site** — pause hover on this host without touching the master switch; the list of paused sites is on the options page
@@ -105,7 +104,7 @@ wudict does **no morphology**: `running` is found only if a dictionary stores it
 
 | Setting | Default | Notes |
 |---|---|---|
-| Base URL | `http://127.0.0.1:6888` | both host and port are configurable in wudict; **Test connection** verifies, **Grant access** (Firefox) requests the host permission |
+| Base URL | `http://127.0.0.1:6888` | both host and port are configurable in wudict; **Test connection** verifies. **Grant access** appears only if that test finds a server that will not answer extensions — it takes the host permission as a fallback |
 | Enabled | on | master switch (also in the toolbar panel) |
 | Hold key | Option / Alt | also in the toolbar panel; named for the machine you are on — ⌥ Option, ⌃ Control, ⇧ Shift, ⌘ Command on macOS, Alt/Ctrl/Shift elsewhere. Command is offered on macOS only: Windows and most Linux desktops take that key before the page sees it. A setting synced in from a Mac is still shown, flagged, and never rewritten behind your back |
 | Hover delay | 200 ms | debounce before lookup fires |
@@ -125,9 +124,10 @@ wudict does **no morphology**: `running` is found only if a dictionary stores it
 |---|---|
 | Nothing happens on hover | Modifier not held · paused globally or on this site · wudict not running → **click the toolbar icon**: the panel says which |
 | Grey icon | Paused — the panel's master switch or its **this site** switch |
-| Amber **!** on the icon | wudict is not reachable → panel → **Retry**, and on Firefox **Grant access** |
+| Amber **!** on the icon | wudict is not reachable → panel → **Retry** |
 | Right-click item missing | Turn it back on in **Options → Searching**; it never appears without a text selection |
-| Firefox: connection fails | Host permission not granted → options **Grant access**, or `about:addons → Permissions` |
+| "is not answering extensions" | wudict is running but predates the extension grant, or its `BROWSER_EXTENSIONS` list omits this extension → update wudict (best), widen the list, or take the fallback: options **Grant access** |
+| A page asks about "other apps and services on this device" | Not this extension: it puts no local address in the page. Something else on that tab is probing your local network |
 | Word shows nothing | Dictionary lacks the word (no morphology) → open the word in wudict to check |
 | Popup closes immediately | Pointer left it; or you scrolled the page (by design — reposition and it reopens) |
 | "does not support this search mode" | A dictionary that can't answer `exact` — expected, others still render |
@@ -140,7 +140,7 @@ Open source — the entire extension is readable and buildable by anyone.
 
 **No data collection. No analytics. No tracking. No profiling. No third-party data.**
 
-Nothing leaves your machine: the only network traffic is a dictionary lookup to the wudict server **you** run. Permissions are `storage` plus that loopback address.
+Nothing leaves your machine: the only network traffic is a dictionary lookup to the wudict server **you** run. Declared permissions are `storage`, `contextMenus` and (Chrome) `offscreen` — no host, no site, no loopback address. The extension does not read any page's content; it reads the one word under your pointer.
 
 ---
 
@@ -179,11 +179,11 @@ The extension is a thin client for your local wudict server.
 
 ```
 page ──mousemove──► content script ──port──► service worker ──HTTP/NDJSON──► wudict:6888
-    (word detected,     (popup DOM,        (host permission, cache,     (dictionaries)
-     popup rendered)     closed shadow root) registry)
+    (word detected,     (popup DOM,        (extension origin, cache,    (dictionaries)
+     popup rendered)     closed shadow root) registry, media proxy)
 ```
 
-- **No CORS problem:** the worker holds the host permission, so its fetches are not subject to the host page's origin. Content scripts never fetch wudict.
+- **The page never touches your local network.** Every request — lookups, article images, pronunciation audio — is made by the service worker on the extension's own origin; wudict allows that origin by name (CORS on its three public read routes, nothing else). Images arrive as bytes and become blob URLs inside the popup; the speaker button's audio plays in an offscreen document and never enters the page at all. That is why Chrome and Firefox never show the "*this site* wants to access other apps and services on this device" prompt while you hover.
 - **One request per lookup** (candidate + dictionary list), aborted cleanly on the next hover; the server streams newline-delimited JSON, so results render as they arrive.
 - **Words are highlighted** in the page via the Custom Highlight API — no DOM rewriting.
 - **Popup isolation:** closed shadow root + server-side `format=clean` (scripts and styles stripped at the source). An entry's dictionary CSS/JS never runs; anchors, tables and images stay.
@@ -206,7 +206,8 @@ page ──mousemove──► content script ──port──► service worker 
 - `GET /api/search?q=…&mode=exact&n=1&format=clean&dict=<ids>` — comma-separated ids answered in **one** request, dictionaries opened concurrently (8 at a time). `n=1` and `clean` are deliberate: the raw article payload is often 100–190 KB, and `clean` is measured ~1.9× smaller with all stylesheet/script refs stripped.
 - Framing: `begin` (slots) → one `hit` per slot (`results` / `skipped` / `error` — the three outcomes that don't abort the stream) → `end`. Hits arrive in completion order; the popup renders into slots by index, so display order is the requested order.
 - Errors arrive in two shapes — HTTP status + JSON before the stream, per-frame `error` after — both handled, neither subsumes the other.
-- `GET /res/{dict}/{name}` resources are fetched as-is; `.spx` audio arrives transcoded to WAV, `Content-Type` decides the decoder, never the URL. One module-scope `Audio` is reused per page (a per-click element can be GC'd before a slow first response plays).
+- `GET /res/{dict}/{name}` resources are fetched **by the worker**, capped at 4 MiB, refused unless the origin is the configured server, the path is under `/res/` and the `Content-Type` is `image/*` or `audio/*` (`.spx` arrives transcoded to WAV — the type decides the decoder, never the URL). The bytes go to the popup base64-encoded; it mints a blob URL per element, lazily, 200 px before the element scrolls into view, and revokes it when the slot is pruned or the popup is destroyed. Results are LRU-cached (64 entries / 16 MiB) and coalesced, so the same pronunciation in two frames is one request.
+- The popup's own speaker button never creates an `Audio` element: the worker fetches, then plays through `AudioContext.decodeAudioData` in an offscreen document (Chrome; the Firefox event page plays it directly), closed after 30 s idle. Closing or hiding the popup stops it — mandatory now that playback outlives the page's DOM.
 
 ### Link/ref classification (popup routing)
 
@@ -215,7 +216,7 @@ page ──mousemove──► content script ──port──► service worker 
 | `bword://run`, `entry:run`, `d:run`, `x:run`, bare headword | lookup | wudict tab, scoped to the *source* dictionary |
 | `@`-prefixed (`bword://@Examples`) | section headword | same as lookup |
 | `#id` / `bword://#id` | anchor | scroll inside popup (`format=clean` keeps ids) |
-| `…/x.mp3` etc. | audio | reused `Audio` element |
+| `…/x.mp3` etc. | audio | worker fetch → offscreen playback (never an element in the page) |
 | `http(s)://…` | external | new tab |
 | anything else | — | ignored, never searched |
 
@@ -226,9 +227,11 @@ page ──mousemove──► content script ──port──► service worker 
 - `src/` is copied verbatim per flavour except `manifest.{chrome,firefox}.json`, which are version-stamped from `VERSION`. MV3 content scripts can't be ES modules, so `tools/bundle-content.mjs` concatenates them in dependency order into one classic script.
 - `make validate-firefox` runs web-ext lint (the authority for that flavour; it correctly rejects Chrome's `service_worker` key).
 - Release flow: `make release` → `clean check package checksums`; signing/publishing are separate steps requiring env-sourced credentials (`WEB_EXT_API_KEY`/`WEB_EXT_API_SECRET`, `CWS_*`) — never make variables, and never on the command line.
-- Browser notes baked into the worker: Chrome grants the loopback host permission at install; Firefox MV3 does **not**, and until granted the fetch fails as a CORS-shaped error carrying "Status code: 200" — the server answered, the extension was not allowed to read it. That is why the Firefox grant step exists.
+- `src/manifest.chrome.json` pins `key`, so the unpacked extension id is the same on every machine — `BROWSER_EXTENSIONS` can name it, and stored settings survive a reinstall. It changed once, at this release: a dev profile loaded from an earlier build gets a new id and starts from defaults.
+- Diagnostics distinguish three states, because they need three different fixes: `unreachable` (a `mode:'no-cors'` probe fails too — nothing is listening), `no-cors-grant` (the probe succeeds, the real fetch does not — the server is there and will not answer *us*), and ok. A CORS-shaped rejection carries no detail by design; the second request is what makes the two tellable apart, and only "Test connection" and the panel's **Retry** pay for it.
+- The host permission survives as `optional_host_permissions` and is offered only in the `no-cors-grant` case. It bypasses CORS entirely, which is why it still works against an older server — and why it is not the default: holding it invites putting loopback URLs back in the page, which is what raises the Local Network Access prompt.
 </details>
 
 ---
 
-**The 30-second summary:** install → grant (Firefox) → start wudict → hold Alt and hover. Everything else is tuning.
+**The 30-second summary:** install → start wudict → hold Alt and hover. Everything else is tuning.

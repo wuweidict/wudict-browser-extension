@@ -61,6 +61,5 @@
     }
   },
   "permissions": ["storage", "contextMenus"],
-  "host_permissions": ["http://127.0.0.1:6888/*"],
   "optional_host_permissions": ["http://*/*", "https://*/*"]
 }

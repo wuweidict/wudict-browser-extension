@@ -14,7 +14,8 @@
 // dictionary styles, so there are no faces to hoist, and the popup's own stack is
 // system fonts only.
 
-import { OUTCOME } from '../common/protocol.js';
+import { api } from '../common/api.js';
+import { AUDIO_PLAY, AUDIO_STOP, MEDIA_GET, OUTCOME } from '../common/protocol.js';
 import { buildEntryUrl, classifyRef, REF } from '../common/refs.js';
 import { sanitizeArticle } from './sanitize.js';
 
@@ -35,21 +36,50 @@ const ICON_ALL = `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="t
     fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`;
 
-// One reused element, at module scope. A per-click `new Audio(url)` can be garbage
-// collected before it plays, because .spx is transcoded to WAV server-side and the
-// first response can lag — silently, and only sometimes.
-let audioEl = null;
+// How far outside the panel a slot is hydrated. Article images should be there by
+// the time they are scrolled to, without fetching the whole entry's media for a
+// popup that is glanced at and dismissed.
+const MEDIA_MARGIN = '200px';
 
+/**
+ * One-shot request to the background. Errors are values here: nothing in the popup
+ * should throw because the worker was replaced mid-hover.
+ */
+function askBackground(message) {
+  try {
+    const reply = api.runtime.sendMessage(message);
+    return reply?.then ? reply : Promise.resolve(reply);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+}
+
+/**
+ * Pronunciation is played by the extension, not by this page: an <audio> element
+ * here would make the page the client of a loopback request and the browser would
+ * prompt the user about the site (D69). The background decodes the bytes in an
+ * offscreen document (Chrome) or its own event page (Firefox).
+ */
 function playAudio(url) {
   if (!url) return;
-  if (!audioEl) audioEl = new Audio();
-  // Never sniff the extension to pick a decoder: /res/ serves .spx as audio/wav,
-  // so the URL lies and the Content-Type does not.
-  audioEl.src = url;
-  const played = audioEl.play();
-  if (played?.catch) {
-    played.catch((error) => console.warn('[wudict] audio play failed:', url, error));
-  }
+  askBackground({ type: AUDIO_PLAY, url }).then(
+    (reply) => {
+      if (reply && reply.ok === false) console.warn('[wudict] audio:', url, reply.message);
+    },
+    (error) => console.warn('[wudict] audio:', url, error.message),
+  );
+}
+
+/** Playback outlives the popup now, so tearing the popup down has to end it. */
+function stopAudio() {
+  askBackground({ type: AUDIO_STOP }).catch(() => {});
+}
+
+function bytesFromBase64(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
 }
 
 // Styles must be a string: a shadow root cannot use a manifest-injected stylesheet,
@@ -140,7 +170,9 @@ export function createPopup({ onMore, onEnter, onLeave, onOpen }) {
   let baseUrl = '';
   let currentTerm = '';
   let observer = null;
+  let mediaObserver = null;
   const visibleSlots = new Set();
+  const blobUrls = new Set();
 
   function mount() {
     if (host) return;
@@ -270,6 +302,9 @@ export function createPopup({ onMore, onEnter, onLeave, onOpen }) {
     visibleSlots.clear();
     observer?.disconnect();
     observer = null;
+    mediaObserver?.disconnect();
+    mediaObserver = null;
+    releaseBlobs();
     panel.replaceChildren();
 
     header = buildHeader(term, fromCache);
@@ -392,6 +427,91 @@ export function createPopup({ onMore, onEnter, onLeave, onOpen }) {
     if (winner) setHeaderDict(winner.dataset.dict, winner.dataset.name);
   }
 
+  // --------------------------------------------------------------- media
+
+  /**
+   * Article media arrives as `data-wd-src` (see sanitize.js) and becomes a blob URL
+   * of bytes the background fetched. Lazily, on its own observer: the header's
+   * observer collapses its root to a thin band, which is the wrong shape entirely
+   * for "will this image be needed soon".
+   */
+  function hydrateMedia(root) {
+    const pending = root.querySelectorAll('[data-wd-src]');
+    if (pending.length === 0) return;
+
+    if (typeof IntersectionObserver === 'undefined') {
+      for (const element of pending) void loadMedia(element);
+      return;
+    }
+    if (!mediaObserver) {
+      mediaObserver = new IntersectionObserver(onMediaVisible, {
+        root: panel,
+        rootMargin: MEDIA_MARGIN,
+        threshold: 0,
+      });
+    }
+    for (const element of pending) mediaObserver.observe(element);
+  }
+
+  function onMediaVisible(entries) {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      mediaObserver.unobserve(entry.target);
+      void loadMedia(entry.target);
+    }
+  }
+
+  async function loadMedia(element) {
+    const url = element.dataset.wdSrc;
+    if (!url) return;
+    // Claim it first: the observer and the no-observer fallback must not both fetch.
+    delete element.dataset.wdSrc;
+
+    let reply;
+    try {
+      reply = await askBackground({ type: MEDIA_GET, url });
+    } catch (error) {
+      console.debug('[wudict] media unavailable:', url, error.message);
+      return;
+    }
+    if (!reply?.ok) {
+      console.debug('[wudict] media unavailable:', url, reply?.message ?? 'no reply');
+      return;
+    }
+    // The popup can be gone, or this slot pruned, while the bytes were in transit.
+    if (!element.isConnected) return;
+
+    const blobUrl = URL.createObjectURL(
+      new Blob([bytesFromBase64(reply.b64)], { type: reply.mime }),
+    );
+    blobUrls.add(blobUrl);
+    element.dataset.wdBlob = blobUrl;
+    element.setAttribute('src', blobUrl);
+
+    // A <source> that changes after its parent has picked a track needs the parent
+    // told; an <img> or a direct <audio src> does not.
+    if (element.tagName === 'SOURCE') element.parentElement?.load?.();
+  }
+
+  /**
+   * A blob URL lives as long as the document unless it is revoked, so every one is
+   * released when its element goes: on prune, on a new lookup, and on teardown.
+   */
+  function releaseBlobs(root) {
+    if (!root) {
+      for (const url of blobUrls) URL.revokeObjectURL(url);
+      blobUrls.clear();
+      return;
+    }
+    for (const element of root.querySelectorAll('[data-wd-blob]')) {
+      const url = element.dataset.wdBlob;
+      URL.revokeObjectURL(url);
+      blobUrls.delete(url);
+      delete element.dataset.wdBlob;
+      element.removeAttribute('src');
+    }
+  }
+
   function hit(groupIndex, { i, name, outcome, results, error }) {
     const group = groups[groupIndex];
     const slot = group?.elements.get(i);
@@ -411,6 +531,8 @@ export function createPopup({ onMore, onEnter, onLeave, onOpen }) {
         body.className = 'body';
         body.appendChild(sanitizeArticle(result.Body, serverOrigin));
         slot.appendChild(body);
+        // After it is in the tree: the observer needs a laid-out element to judge.
+        hydrateMedia(body);
       }
       return;
     }
@@ -435,6 +557,10 @@ export function createPopup({ onMore, onEnter, onLeave, onOpen }) {
         if (slot.querySelector('.body')) continue;
         observer?.unobserve(slot);
         visibleSlots.delete(slot);
+        for (const element of slot.querySelectorAll('[data-wd-src]')) {
+          mediaObserver?.unobserve(element);
+        }
+        releaseBlobs(slot);
         slot.remove();
         group.elements.delete(i);
       }
@@ -479,6 +605,8 @@ export function createPopup({ onMore, onEnter, onLeave, onOpen }) {
 
   function hide() {
     if (host) host.style.display = 'none';
+    // The audio is not in this tree any more, so hiding the tree does not end it.
+    stopAudio();
   }
 
   function isVisible() {
@@ -494,7 +622,11 @@ export function createPopup({ onMore, onEnter, onLeave, onOpen }) {
   function destroy() {
     observer?.disconnect();
     observer = null;
+    mediaObserver?.disconnect();
+    mediaObserver = null;
     visibleSlots.clear();
+    releaseBlobs();
+    stopAudio();
     host?.remove();
     host = null;
     shadow = null;

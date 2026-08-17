@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "description": "Show wudict dictionary definitions on hover, optionally behind a modifier key.",
   "minimum_chrome_version": "116",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnlyAst/uvPDFEzhUMyzImfDmbCQk0c+klUhkB1DRKt9HjdKLyRbDM9wBSZM5uhzATUrXmT47mD+VcXxDxD3MSjJ7nNphbevdkNrIMWcRq8MZwMNUwX1d30L0DQpGH1BLNSsYmI3rvDpQEJrsU9zwzsQ3WDbiDjLC4xlrP7cz2vGyODfOFFvFku7u4AsUhi0Y8W01if7OqK55/NGMY2XJfaNdrSy+1EeZjm9JsQ6g05/VaU2cYLG19u+jaKUyWJajfO6+h+OvDy1pQV6VAcMTKx2WYExJNsruBBFI2reHpiz/CJzZYadYbI46LGT+7sVc6A2fT9VGnCN7TKOUG+ZGNQIDAQAB",
   "background": {
     "service_worker": "background/main.js",
     "type": "module"
@@ -52,7 +53,6 @@
       "description": "Pause or resume hover lookup on this site"
     }
   },
-  "permissions": ["storage", "contextMenus"],
-  "host_permissions": ["http://127.0.0.1:6888/*"],
+  "permissions": ["storage", "contextMenus", "offscreen"],
   "optional_host_permissions": ["http://*/*", "https://*/*"]
 }

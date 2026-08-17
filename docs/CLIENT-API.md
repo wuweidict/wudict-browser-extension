@@ -186,26 +186,61 @@ is already on screen.
 
 ---
 
-## 4. No CORS. This decides your architecture.
+## 4. CORS for extension origins only. This decides your architecture.
 
-The server sends **no `Access-Control-Allow-Origin` header**, on any endpoint.
+Websites get **no `Access-Control-Allow-Origin` header**, on any endpoint. A
+page cannot read wudict, which is the whole protection an unauthenticated
+loopback server has.
 
-For an MV3 extension this means a content script cannot fetch the server
-directly — its requests carry the host page's origin and are subject to that
-page's CORS. The working shape is:
+**Browser extensions get one, on the public read API only.** Since the release
+that added D69, wudict echoes the request's `Origin` back when — and only
+when — all of this holds:
+
+| condition | detail |
+|---|---|
+| scheme | `chrome-extension://` or `moz-extension://`, nothing else. `null`, `file://` and every http(s) origin are refused |
+| shape | origin only: a host, no path, no query, no userinfo |
+| route | exactly `GET /api/dicts`, `GET /api/search`, `GET /res/` |
+| pin (optional) | if `BROWSER_EXTENSIONS` is set, the origin must be on that list |
+
+`Vary: Origin` is sent on those routes regardless, so a cache cannot serve one
+client's answer to another. The header is **never** `*`, and
+`Access-Control-Allow-Credentials` is **never** sent: the server has no cookies
+and must not start honouring any. `OPTIONS` on the three routes answers 204
+with `Allow-Methods: GET`, `Allow-Headers: accept`, `Max-Age: 600` — today's
+requests are simple and never preflight, but a future one that does must not
+meet a 405.
+
+Everything else stays same-origin. No extension can `DELETE /api/library`, drive
+`/api/ingest` or `/api/rescan`, or read `/api/prefs`, `/api/config`,
+`/api/reveal`.
+
+The shape this buys you:
 
 ```
 content script  ──message──▶  background service worker  ──fetch──▶  wudict
-   (hover, DOM)                (host_permissions: http://127.0.0.1:6888/*)
+   (hover, DOM)                (extension origin, no host permission)
 ```
 
-The service worker holds the host permission, so its fetches are not
-cross-origin-restricted. It is also the right place for the response cache
-(§7) — one cache shared by every tab, rather than one per tab.
+The worker is still where every fetch belongs — it is also the right place for
+the response cache (§7), one shared by every tab rather than one per tab — but
+it no longer needs `host_permissions` to get there. That matters for a reason
+beyond the install prompt: **anything a content script puts in the page's DOM
+carrying a `http://127.0.0.1:…` URL is the *page's* request**, and Chrome/Edge
+142+ and Firefox 151+ gate those behind the Local Network Access prompt, which
+names the site the user is reading. So fetch media in the worker and hand the
+content script bytes (see this extension's `src/background/media.js`), and play
+audio in an offscreen document rather than in the page. Then no loopback URL
+ever reaches the page, and no prompt ever appears.
 
-Do not "fix" this by adding CORS headers to wudict without deciding who may
-call it: the server binds loopback by default precisely because it is
-unauthenticated.
+A host permission still works and still bypasses CORS — keep it as an
+`optional_host_permissions` fallback for a wudict older than this release, or
+one whose `BROWSER_EXTENSIONS` list does not include you.
+
+The residual, accepted deliberately: any extension the user has installed can
+read their dictionaries. It could have declared the host permission itself, so
+the grant adds no capability that was not already one prompt away, and
+`BROWSER_EXTENSIONS` narrows it to a named list for anyone who wants that.
 
 ---
 

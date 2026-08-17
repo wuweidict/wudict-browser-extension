@@ -5,16 +5,18 @@
 
 // Background worker (Chrome) / event page (Firefox).
 //
-// Holds the host permission, so its fetches are not subject to the host page's CORS
-// — which is the whole reason lookups route through here rather than being issued
-// from the content script. Also the right place for the cache: one shared by every
-// tab instead of one per tab.
+// Every byte that comes from wudict is fetched here — lookups, article images,
+// pronunciation audio. This is an extension origin, so its requests are exempt from
+// the Local Network Access gate that would otherwise make the browser ask the user
+// whether *the site they are reading* may reach their local network (D69). It is
+// also the right place for the caches: one shared by every tab instead of one per
+// tab.
 //
-// Verified in both browsers: Chrome grants the loopback host permission at install
-// and Private Network Access does not block the fetch; Firefox MV3 does NOT grant
-// host_permissions at install, and until the user grants it the fetch fails as a
-// CORS error carrying "Status code: 200" — the server answered, the extension was
-// not allowed to read it.
+// The extension declares no host permission. It reads wudict cross-origin, on the
+// server's own CORS grant to `chrome-extension://` and `moz-extension://` origins
+// (`GET /api/dicts`, `GET /api/search`, `GET /res/` — nothing that can write). A
+// server older than that grant, or a base URL it does not cover, falls back to the
+// optional host permission the user can grant from the toolbar panel.
 
 import { api } from '../common/api.js';
 import {
@@ -25,7 +27,10 @@ import {
   loadRegistry,
   saveRegistry,
 } from '../common/dicts.js';
+import { play as playHere, stop as stopHere } from '../common/player.js';
 import {
+  AUDIO_PLAY,
+  AUDIO_STOP,
   BEGIN,
   CANCEL,
   END,
@@ -33,6 +38,10 @@ import {
   HIT,
   LOOKUP,
   LOOKUP_DEFAULTS,
+  MEDIA_GET,
+  OFFSCREEN_PLAY,
+  OFFSCREEN_STOP,
+  OFFSCREEN_TARGET,
   OUTCOME,
   PORT_NAME,
 } from '../common/protocol.js';
@@ -41,9 +50,13 @@ import { getSettings, setSettings, withSiteRule } from '../common/settings.js';
 import { HEALTH, hostOf, toolbarState } from '../common/state.js';
 import { cacheKey, createCache } from './cache.js';
 import { droppedIds, fetchDicts, InvalidQueryError, search } from './client.js';
+import { createInflight } from './inflight.js';
+import { createMediaProxy } from './media.js';
 import { WudictHttpError } from './ndjson.js';
 
 const cache = createCache();
+const media = createMediaProxy();
+const searchInflight = createInflight();
 
 let registry = null;
 let registryFetch = null;
@@ -54,12 +67,17 @@ let registryFetch = null;
 // forever to answer a question nobody is asking. It is set as a side effect of work
 // that already happens — every lookup is a probe — and refreshed on demand when the
 // popup opens.
-const health = { status: HEALTH.UNKNOWN, message: '', at: 0 };
+// `reason` is why it is down, when the answer is known well enough to act on:
+// 'unreachable' · 'no-cors-grant' · 'http'. A lookup failure carries none — from
+// inside a rejected fetch the two are indistinguishable without a second request,
+// and the panel's "Retry" runs the smoke test that can tell them apart.
+const health = { status: HEALTH.UNKNOWN, message: '', reason: null, at: 0 };
 
-function setHealth(status, message = '') {
+function setHealth(status, message = '', reason = null) {
   const changed = health.status !== status;
   health.status = status;
   health.message = message;
+  health.reason = reason;
   health.at = Date.now();
   if (changed) void paintAllTabs();
 }
@@ -70,7 +88,7 @@ async function probeHealth({ maxAgeMs = 0 } = {}) {
     return health;
   }
   const result = await smoke();
-  setHealth(result.ok ? HEALTH.OK : HEALTH.DOWN, result.message);
+  setHealth(result.ok ? HEALTH.OK : HEALTH.DOWN, result.message, result.reason ?? null);
   return health;
 }
 
@@ -224,6 +242,10 @@ async function runLookup(port, session, message) {
 /**
  * Run one candidate. Returns `{ fromCache }` if it produced results and was
  * rendered, or false if it found nothing and the chain should continue.
+ *
+ * Three paths, in order: replay the cache; wait for an identical search another
+ * frame already has in flight and replay what it cached (`all_frames: true` means
+ * one hover can reach here several times over); otherwise stream it.
  */
 async function attemptCandidate({
   post,
@@ -238,16 +260,42 @@ async function attemptCandidate({
   const slotsFor = (ids) => ids.map((dict) => ({ dict, name: labelFor(current, dict) }));
 
   // All-or-nothing: a partial hit refetches rather than merging a subset back in.
-  const keys = dicts.map((dict) => cacheKey(dict, query));
-  if (keys.every((key) => cache.has(key))) {
-    const entries = dicts.map((dict) => cache.get(cacheKey(dict, query)));
-    if (!entries.some((entry) => entry.outcome === OUTCOME.RESULTS)) return false;
+  // Returns null when the cache cannot answer at all — distinct from answering
+  // "nothing found", which is a cached fact in its own right.
+  const replay = (fromCache) => {
+    const keys = dicts.map((dict) => cacheKey(dict, query));
+    if (!keys.every((key) => cache.has(key))) return null;
 
-    post({ type: BEGIN, id, term: query.q, slots: slotsFor(dicts), append, fromCache: true });
+    const entries = keys.map((key) => cache.get(key));
+    if (!entries.some((entry) => entry.outcome === OUTCOME.RESULTS)) return { matched: false };
+
+    post({ type: BEGIN, id, term: query.q, slots: slotsFor(dicts), append, fromCache });
     entries.forEach((entry, i) => post({ type: HIT, id, i, dict: dicts[i], ...entry }));
-    return { fromCache: true };
+    return { matched: true };
+  };
+
+  const cached = replay(true);
+  if (cached) return cached.matched ? { fromCache: true } : false;
+
+  const key = searchKey(baseUrl, dicts, query);
+  const leader = searchInflight.join(key);
+  if (leader) {
+    // The leader streams into its own port; a joiner cannot share that fan-out, so
+    // it takes the whole answer at once from the cache the leader fills. Its failure
+    // is not ours to report — we simply find the cache still empty and do the work.
+    await leader.catch(() => {});
+    if (signal.aborted) return false;
+    const joined = replay(false);
+    if (joined) return joined.matched ? { fromCache: false } : false;
   }
 
+  return searchInflight.run(key, () =>
+    streamCandidate({ post, id, baseUrl, dicts, query, slotsFor, signal, append }),
+  );
+}
+
+/** The network half of `attemptCandidate`, run by at most one caller at a time. */
+async function streamCandidate({ post, id, baseUrl, dicts, query, slotsFor, signal, append }) {
   let committed = false;
   let slots = null;
   const buffered = [];
@@ -300,6 +348,11 @@ async function attemptCandidate({
   return committed ? { fromCache: false } : false;
 }
 
+/** Identical requests coalesce; a different dictionary set is a different request. */
+function searchKey(baseUrl, dicts, { q, mode, n, format }) {
+  return `${baseUrl}|${[...dicts].sort().join(',')}|${mode}|${n}|${format}|${q}`;
+}
+
 /**
  * Which dictionaries to query: an explicit list, or the next capable ones not
  * already on screen (the "more" flow).
@@ -314,11 +367,17 @@ function resolveDicts(message, current, mode) {
   return capable.filter((id) => !exclude.has(id)).slice(0, limit);
 }
 
+/**
+ * A fetch failure from here has exactly two causes and they look identical: nothing
+ * is listening, or something is listening and will not let an extension read it.
+ * Only a second request can tell them apart, so the cheap message says so and "Test
+ * connection" (smoke) does the work.
+ */
 function describeFetchFailure(error) {
   return (
-    `could not reach wudict: ${error.message}. Either it is not running, or the ` +
-    'host permission is not granted (Firefox MV3 does not grant host_permissions ' +
-    'at install: about:addons > wudict Hover > Permissions).'
+    `could not reach wudict: ${error.message}. Either it is not running at this ` +
+    'address, or it is an older wudict that does not answer browser extensions — ' +
+    '"Test connection" says which.'
   );
 }
 
@@ -476,9 +535,130 @@ function normalizeTerm(value) {
   return value.replace(/\s+/g, ' ').trim().slice(0, 200);
 }
 
+// ------------------------------------------------------------- media and audio
+
+/** Article media, as bytes. The popup turns them into a blob URL of its own. */
+async function getMedia(url) {
+  const { baseUrl } = await getSettings();
+  return media.get(url, { baseUrl });
+}
+
+// Chrome's service worker has no AudioContext, so playback happens in an offscreen
+// document; Firefox's background is a real event page and plays in place. Selected
+// by capability, never by sniffing the browser.
+const OFFSCREEN_PATH = 'offscreen/offscreen.html';
+const OFFSCREEN_IDLE_MS = 30_000;
+
+let offscreenSetup = null;
+let offscreenTimer = null;
+
+const canOffscreen = () => Boolean(api.offscreen?.createDocument);
+
+async function ensureOffscreen() {
+  if (await api.offscreen.hasDocument()) return;
+
+  // Two clicks in the same tick would otherwise both create one, and the second
+  // throws. One promise, shared.
+  if (!offscreenSetup) {
+    offscreenSetup = api.offscreen
+      .createDocument({
+        url: OFFSCREEN_PATH,
+        reasons: ['AUDIO_PLAYBACK'],
+        justification: 'Play dictionary pronunciation audio outside the web page.',
+      })
+      .finally(() => {
+        offscreenSetup = null;
+      });
+  }
+
+  try {
+    await offscreenSetup;
+  } catch (error) {
+    // Lost a race with another creator: the document exists, which is all we wanted.
+    if (!(await api.offscreen.hasDocument())) throw error;
+  }
+}
+
+/**
+ * An offscreen document keeps the worker alive, so it is closed once it has been
+ * silent for a while rather than left standing (D64 power discipline).
+ */
+function idleCloseOffscreen() {
+  if (offscreenTimer !== null) clearTimeout(offscreenTimer);
+  offscreenTimer = setTimeout(() => {
+    offscreenTimer = null;
+    void closeOffscreen();
+  }, OFFSCREEN_IDLE_MS);
+}
+
+async function closeOffscreen() {
+  try {
+    if (await api.offscreen.hasDocument()) await api.offscreen.closeDocument();
+  } catch {
+    // Already gone, or the worker was replaced under us.
+  }
+}
+
+/**
+ * The document is created by `createDocument` but its script registers its listener
+ * a beat later, so the first message can land before anyone is listening. One retry
+ * covers that without a handshake.
+ */
+async function sendToOffscreen(payload) {
+  const message = { ...payload, target: OFFSCREEN_TARGET };
+  try {
+    return await api.runtime.sendMessage(message);
+  } catch {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    return api.runtime.sendMessage(message);
+  }
+}
+
+async function playAudio(url) {
+  const { mime, b64 } = await getMedia(url);
+  if (!mime.startsWith('audio/')) throw new Error(`refusing to play ${mime}`);
+
+  if (!canOffscreen()) {
+    await playHere(b64, mime);
+    return { ok: true, where: 'background' };
+  }
+
+  await ensureOffscreen();
+  const reply = await sendToOffscreen({ type: OFFSCREEN_PLAY, b64, mime });
+  idleCloseOffscreen();
+  if (reply && reply.ok === false) throw new Error(reply.message ?? 'playback failed');
+  return { ok: true, where: 'offscreen' };
+}
+
+/**
+ * Stopping is now mechanically required rather than a nicety: the audio no longer
+ * lives in the popup, so nothing about tearing the popup down would end it.
+ */
+async function stopAudio() {
+  if (!canOffscreen()) {
+    stopHere();
+    return { ok: true };
+  }
+  try {
+    if (await api.offscreen.hasDocument()) await sendToOffscreen({ type: OFFSCREEN_STOP });
+  } catch {
+    // Nothing is playing, which is the state the caller asked for.
+  }
+  idleCloseOffscreen();
+  return { ok: true };
+}
+
 // ----------------------------------------------------------------- diagnostics
 
-/** `await wudictSmoke()` in the background console. */
+/**
+ * `await wudictSmoke()` in the background console, and what "Test connection"
+ * reports.
+ *
+ * Three distinguishable outcomes, because they need three different fixes:
+ * `unreachable` (start wudict, or fix the address), `no-cors-grant` (the server is
+ * there but does not answer extensions — upgrade it, widen BROWSER_EXTENSIONS, or
+ * grant the site permission as a fallback), and ok.
+ */
 async function smoke() {
   const { baseUrl } = await getSettings();
   const started = Date.now();
@@ -490,6 +670,7 @@ async function smoke() {
       ok: true,
       baseUrl,
       permission,
+      transport: permission === 'granted' ? 'host-permission' : 'cors',
       message: `${next.dicts.length} dictionaries (begin.total ${next.total}) in ${
         Date.now() - started
       } ms`,
@@ -502,22 +683,52 @@ async function smoke() {
     if (error instanceof WudictHttpError) {
       return { ok: false, baseUrl, permission, reason: 'http', message: error.message };
     }
+
+    const reachable = await isReachable(baseUrl);
     return {
       ok: false,
       baseUrl,
       permission,
-      reason: 'blocked',
-      message: describeFetchFailure(error),
+      reason: reachable ? 'no-cors-grant' : 'unreachable',
+      message: reachable
+        ? `${baseUrl} answered, but not to this extension. Update wudict to a build ` +
+          'that allows extension origins, or (if BROWSER_EXTENSIONS pins the list) ' +
+          'add this extension to it. Granting site access from the panel also works.'
+        : `nothing answers at ${baseUrl} — start wudict, or correct the address.`,
     };
   }
 }
 
+/**
+ * Is anything listening at all?
+ *
+ * A `no-cors` request is opaque — not one byte of it is readable — but it is not
+ * refused for want of a CORS grant, which is exactly what makes it able to separate
+ * "wudict is not running" from "wudict is running and will not let us read it".
+ */
+async function isReachable(baseUrl) {
+  try {
+    await fetch(`${baseUrl}/api/dicts`, {
+      mode: 'no-cors',
+      cache: 'no-store',
+      credentials: 'omit',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The fallback transport, not the normal one: the extension declares no host
+ * permission and reads wudict on its CORS grant. A user pointing it at a server that
+ * predates that grant can grant site access from the toolbar panel instead — which
+ * `permissions.request` requires a user gesture for, so the panel asks, not us.
+ */
 async function hostPermissionState(baseUrl) {
-  // Advisory only: on Firefox 128 this reports true for a host permission the user
-  // has not granted, and the fetch is then blocked by CORS anyway.
   try {
     const origins = [`${new URL(baseUrl).origin}/*`];
-    return (await api.permissions.contains({ origins })) ? 'reported-granted' : 'not-granted';
+    return (await api.permissions.contains({ origins })) ? 'granted' : 'not-granted';
   } catch (error) {
     return `unknown (${error.message})`;
   }
@@ -526,11 +737,15 @@ async function hostPermissionState(baseUrl) {
 globalThis.wudictSmoke = smoke;
 globalThis.wudictStats = () => ({
   cache: cache.stats(),
+  media: media.stats(),
   registry: registry
     ? { baseUrl: registry.baseUrl, dicts: registry.dicts.length, fetchedAt: registry.fetchedAt }
     : null,
 });
-globalThis.wudictClearCache = () => cache.clear();
+globalThis.wudictClearCache = () => {
+  cache.clear();
+  media.clear();
+};
 
 // --------------------------------------------------------------- context menus
 
@@ -760,7 +975,12 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
         settings,
         host,
         tabId: tab?.id ?? null,
-        health: { status: health.status, message: health.message, at: health.at },
+        health: {
+          status: health.status,
+          message: health.message,
+          reason: health.reason,
+          at: health.at,
+        },
         dicts: registry?.dicts?.length ?? null,
         view: toolbarState({
           settings,
@@ -798,13 +1018,37 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'wudict:smoke') {
     smoke().then(
       (result) => {
-        setHealth(result.ok ? HEALTH.OK : HEALTH.DOWN, result.message);
+        setHealth(result.ok ? HEALTH.OK : HEALTH.DOWN, result.message, result.reason ?? null);
         sendResponse(result);
       },
       (error) => sendResponse({ ok: false, reason: 'exception', message: String(error) }),
     );
     return true;
   }
+  // Article media, as bytes: the popup mints its own blob URL from them, so no
+  // loopback URL ever appears in the host page's DOM (D69).
+  if (message?.type === MEDIA_GET) {
+    getMedia(message.url).then(
+      ({ mime, b64 }) => sendResponse({ ok: true, mime, b64 }),
+      (error) => sendResponse({ ok: false, message: error.message }),
+    );
+    return true;
+  }
+
+  if (message?.type === AUDIO_PLAY) {
+    playAudio(message.url).then(sendResponse, (error) =>
+      sendResponse({ ok: false, message: error.message }),
+    );
+    return true;
+  }
+
+  if (message?.type === AUDIO_STOP) {
+    stopAudio().then(sendResponse, (error) =>
+      sendResponse({ ok: false, message: error.message }),
+    );
+    return true;
+  }
+
   if (message?.type === 'wudict:open') {
     openTab(message.url, message.reuse === true).then(
       () => sendResponse({ ok: true }),

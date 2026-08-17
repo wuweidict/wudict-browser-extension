@@ -1,0 +1,18 @@
+<!doctype html>
+<!--
+  Copyright 2026 Google LLC
+  SPDX-License-Identifier: agpl
+
+  Chrome only, and never visible: a service worker has no AudioContext, so
+  pronunciation is decoded here instead of in the web page (D69). The background
+  closes this document once playback has been idle for a while.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>wudict audio</title>
+  </head>
+  <body>
+    <script type="module" src="offscreen.js"></script>
+  </body>
+</html>

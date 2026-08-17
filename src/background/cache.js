@@ -21,14 +21,20 @@
 const DEFAULTS = {
   maxEntries: 400,
   maxBytes: 8 * 1024 * 1024,
+  sizeOf: estimateArticleBytes,
 };
 
 export function cacheKey(dictId, { q, mode, n, format }) {
   return `${dictId}|${mode}|${n}|${format}|${q}`;
 }
 
+/**
+ * @param options.sizeOf how to weigh a value against `maxBytes`. The default reads
+ *   an article entry; the media proxy stores base64 blobs and passes its own, which
+ *   is the whole reason this is a parameter rather than a fixed function.
+ */
 export function createCache(options = {}) {
-  const { maxEntries, maxBytes } = { ...DEFAULTS, ...options };
+  const { maxEntries, maxBytes, sizeOf } = { ...DEFAULTS, ...options };
   // Map iterates in insertion order, so the first key is the least recently used
   // as long as every read re-inserts.
   const entries = new Map();
@@ -53,7 +59,7 @@ export function createCache(options = {}) {
       bytes -= entries.get(key).bytes;
       entries.delete(key);
     }
-    const size = estimateBytes(value);
+    const size = sizeOf(value);
     entries.set(key, { value, bytes: size });
     bytes += size;
     evict();
@@ -88,7 +94,7 @@ export function createCache(options = {}) {
  * Cheap size estimate: the article HTML dominates, so summing string lengths is
  * within a small factor and costs far less than serialising the value.
  */
-function estimateBytes(value) {
+function estimateArticleBytes(value) {
   let total = 64; // key and bookkeeping overhead
   if (value?.name) total += value.name.length;
   if (value?.error) total += value.error.length;
