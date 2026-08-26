@@ -60,6 +60,5 @@
       "description": "Pause or resume hover lookup on this site"
     }
   },
-  "permissions": ["storage", "contextMenus"],
-  "optional_host_permissions": ["http://*/*", "https://*/*"]
+  "permissions": ["storage", "contextMenus"]
 }

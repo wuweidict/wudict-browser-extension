@@ -31,9 +31,6 @@ const FIELDS = {
 let settings = null;
 let registry = null;
 let os = OS.LINUX;
-// Set by the last "Test connection": the host permission is a fallback, so the
-// button for it only appears once a test has shown it is the missing piece.
-let grantWouldHelp = false;
 
 // ----------------------------------------------------------------- modifiers
 
@@ -61,59 +58,6 @@ function renderModifier() {
   $('modifierNote').textContent = note ?? '';
   $('modifierNote').hidden = note === null;
 }
-
-// ------------------------------------------------------------------ permission
-
-/**
- * The fallback transport (D69).
- *
- * The extension declares no host permission: it reads wudict on the server's CORS
- * grant, and nothing it does puts a loopback URL in the page, so no browser asks the
- * user whether the *site they are reading* may reach their local network. Against a
- * server that predates that grant — or one whose `BROWSER_EXTENSIONS` list omits
- * this extension — holding the host permission bypasses CORS and works anyway.
- *
- * It can only be requested from a page with a user gesture, which is exactly what
- * this one has and a background worker never does.
- */
-async function permissionOrigins(baseUrl) {
-  return [`${new URL(baseUrl).origin}/*`];
-}
-
-async function hasPermission(baseUrl) {
-  try {
-    return await api.permissions.contains({ origins: await permissionOrigins(baseUrl) });
-  } catch {
-    return false;
-  }
-}
-
-async function refreshGrantButton() {
-  const button = $('grant');
-  if (!grantWouldHelp) {
-    button.hidden = true;
-    return;
-  }
-  try {
-    const granted = await hasPermission(settings.baseUrl);
-    button.hidden = granted;
-  } catch {
-    button.hidden = true;
-  }
-}
-
-$('grant').addEventListener('click', async () => {
-  try {
-    const granted = await api.permissions.request({
-      origins: await permissionOrigins(settings.baseUrl),
-    });
-    setStatus($('status'), granted ? 'Access granted.' : 'Access denied.', granted);
-    await refreshGrantButton();
-    if (granted) await testConnection();
-  } catch (error) {
-    setStatus($('status'), error.message, false);
-  }
-});
 
 // -------------------------------------------------------------------- settings
 
@@ -161,9 +105,6 @@ for (const id of Object.keys(FIELDS)) {
       // different registry.
       registry = null;
       renderDicts();
-      // A verdict about the old address says nothing about this one.
-      grantWouldHelp = false;
-      await refreshGrantButton();
       setStatus($('status'), 'Saved. Test the connection to load dictionaries.', null);
     }
   });
@@ -174,15 +115,12 @@ for (const id of Object.keys(FIELDS)) {
 async function testConnection() {
   setStatus($('status'), 'Testing…', null);
   const result = await api.runtime.sendMessage({ type: 'wudict:smoke' });
-  // Nothing is listening: a permission cannot start a server, so do not offer one.
-  grantWouldHelp = !result?.ok && result?.reason !== 'unreachable';
   if (result?.ok) {
     setStatus($('status'), result.message, true);
     await loadRegistry(false);
   } else {
     setStatus($('status'), result?.message ?? 'No response from the extension.', false);
   }
-  await refreshGrantButton();
 }
 
 $('test').addEventListener('click', testConnection);
@@ -333,7 +271,6 @@ async function init() {
   // generic field writer tries to assign one.
   renderModifier();
   for (const id of Object.keys(FIELDS)) writeField(id, settings[id] ?? DEFAULTS[id]);
-  await refreshGrantButton();
   renderSites();
   renderDicts();
 

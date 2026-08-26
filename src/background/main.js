@@ -12,11 +12,11 @@
 // also the right place for the caches: one shared by every tab instead of one per
 // tab.
 //
-// The extension declares no host permission. It reads wudict cross-origin, on the
-// server's own CORS grant to `chrome-extension://` and `moz-extension://` origins
-// (`GET /api/dicts`, `GET /api/search`, `GET /res/` — nothing that can write). A
-// server older than that grant, or a base URL it does not cover, falls back to the
-// optional host permission the user can grant from the toolbar panel.
+// The extension declares no host permission, optional or otherwise. It reads wudict
+// cross-origin, on the server's own CORS grant to `chrome-extension://` and
+// `moz-extension://` origins (`GET /api/dicts`, `GET /api/search`, `GET /res/` —
+// nothing that can write). That grant is the only supported transport: a wudict that
+// does not answer extension origins is unsupported, and the fix is to update it.
 
 import { api } from '../common/api.js';
 import {
@@ -656,21 +656,19 @@ async function stopAudio() {
  *
  * Three distinguishable outcomes, because they need three different fixes:
  * `unreachable` (start wudict, or fix the address), `no-cors-grant` (the server is
- * there but does not answer extensions — upgrade it, widen BROWSER_EXTENSIONS, or
- * grant the site permission as a fallback), and ok.
+ * there but does not answer extensions — update it, or widen BROWSER_EXTENSIONS),
+ * and ok.
  */
 async function smoke() {
   const { baseUrl } = await getSettings();
   const started = Date.now();
-  const permission = await hostPermissionState(baseUrl);
 
   try {
     const next = await refreshRegistry(baseUrl);
     return {
       ok: true,
       baseUrl,
-      permission,
-      transport: permission === 'granted' ? 'host-permission' : 'cors',
+      transport: 'cors',
       message: `${next.dicts.length} dictionaries (begin.total ${next.total}) in ${
         Date.now() - started
       } ms`,
@@ -681,19 +679,18 @@ async function smoke() {
     };
   } catch (error) {
     if (error instanceof WudictHttpError) {
-      return { ok: false, baseUrl, permission, reason: 'http', message: error.message };
+      return { ok: false, baseUrl, reason: 'http', message: error.message };
     }
 
     const reachable = await isReachable(baseUrl);
     return {
       ok: false,
       baseUrl,
-      permission,
       reason: reachable ? 'no-cors-grant' : 'unreachable',
       message: reachable
         ? `${baseUrl} answered, but not to this extension. Update wudict to a build ` +
           'that allows extension origins, or (if BROWSER_EXTENSIONS pins the list) ' +
-          'add this extension to it. Granting site access from the panel also works.'
+          'add this extension to it.'
         : `nothing answers at ${baseUrl} — start wudict, or correct the address.`,
     };
   }
@@ -716,21 +713,6 @@ async function isReachable(baseUrl) {
     return true;
   } catch {
     return false;
-  }
-}
-
-/**
- * The fallback transport, not the normal one: the extension declares no host
- * permission and reads wudict on its CORS grant. A user pointing it at a server that
- * predates that grant can grant site access from the toolbar panel instead — which
- * `permissions.request` requires a user gesture for, so the panel asks, not us.
- */
-async function hostPermissionState(baseUrl) {
-  try {
-    const origins = [`${new URL(baseUrl).origin}/*`];
-    return (await api.permissions.contains({ origins })) ? 'granted' : 'not-granted';
-  } catch (error) {
-    return `unknown (${error.message})`;
   }
 }
 

@@ -29,7 +29,7 @@ AMO_CHANNEL ?= unlisted
 
 # Chrome: local CRX signing key, and the Web Store item to publish to.
 CRX_KEY      ?= chrome-key.pem
-CWS_ITEM_ID  ?=
+CWS_ITEM_ID  ?= bknaaoffefipfnpefmkbipcdemljbhjh
 
 # Persistent dev profiles: a throwaway profile would discard the Firefox host
 # permission grant (and any Chrome state) on every launch.
@@ -237,8 +237,8 @@ validate-chrome: build-chrome ## Sanity-check the built Chrome manifest
 		|| { echo "  Chrome MV3 needs background.service_worker"; exit 1; }
 	@jq -e '(.key | type) == "string" and (.key | length) > 300' $(CHROME_DIR)/manifest.json >/dev/null \
 		|| { echo "  manifest.key missing — the unpacked extension id would drift per install"; exit 1; }
-	@jq -e 'has("host_permissions") | not' $(CHROME_DIR)/manifest.json >/dev/null \
-		|| { echo "  host_permissions must stay absent (D69: no loopback URL reaches the page)"; exit 1; }
+	@jq -e 'has("host_permissions") or has("optional_host_permissions") | not' $(CHROME_DIR)/manifest.json >/dev/null \
+		|| { echo "  host permissions must stay absent, optional included (D69: the CORS grant is the only transport)"; exit 1; }
 	@jq -e '.permissions | index("offscreen")' $(CHROME_DIR)/manifest.json >/dev/null \
 		|| { echo "  the offscreen permission is what keeps audio out of the page"; exit 1; }
 	@node tools/check-imports.mjs $(CHROME_DIR)
@@ -251,8 +251,8 @@ validate-firefox: build-firefox ## Validate the Firefox build with web-ext lint
 		|| { echo "  Firefox MV3 needs background.scripts, not service_worker"; exit 1; }
 	@jq -e '.browser_specific_settings.gecko.id' $(FIREFOX_DIR)/manifest.json >/dev/null \
 		|| { echo "  browser_specific_settings.gecko.id is required for signing"; exit 1; }
-	@jq -e 'has("host_permissions") | not' $(FIREFOX_DIR)/manifest.json >/dev/null \
-		|| { echo "  host_permissions must stay absent (D69: no loopback URL reaches the page)"; exit 1; }
+	@jq -e 'has("host_permissions") or has("optional_host_permissions") | not' $(FIREFOX_DIR)/manifest.json >/dev/null \
+		|| { echo "  host permissions must stay absent, optional included (D69: the CORS grant is the only transport)"; exit 1; }
 	@node tools/check-imports.mjs $(FIREFOX_DIR)
 	@if [ -x "$(WEB_EXT)" ]; then $(WEB_EXT) lint --source-dir $(FIREFOX_DIR) --self-hosted; \
 	else echo "  web-ext not installed — run 'make deps' (skipping lint)"; fi
@@ -313,10 +313,22 @@ _watch:
 
 # ----------------------------------------------------------------------- package
 
+# The Web Store rejects an uploaded manifest that carries `key` — it assigns the
+# id itself. The unpacked build must keep `key` (stable id across dev installs),
+# so the store zip is built from a staged copy with that one field deleted.
+CHROME_STAGE := $(DIST)/.chrome-store
+
 $(CHROME_ZIP): $(CHROME_DIR)/.build-stamp | $(ART)
 	@rm -f $@
-	@cd $(CHROME_DIR) && zip -qr -X "$(abspath $(CHROME_ZIP))" . -x '.build-stamp'
-	@echo "  packaged $@ ($$(du -h $@ | cut -f1))"
+	@rm -rf $(CHROME_STAGE) && mkdir -p $(CHROME_STAGE)
+	@cd $(CHROME_DIR) && tar cf - --exclude .build-stamp . \
+		| (cd "$(abspath $(CHROME_STAGE))" && tar xf -)
+	@jq 'del(.key)' $(CHROME_DIR)/manifest.json > $(CHROME_STAGE)/manifest.json
+	@jq -e 'has("key") | not' $(CHROME_STAGE)/manifest.json >/dev/null \
+		|| { echo "  key survived into the store manifest"; exit 1; }
+	@cd $(CHROME_STAGE) && zip -qr -X "$(abspath $(CHROME_ZIP))" .
+	@rm -rf $(CHROME_STAGE)
+	@echo "  packaged $@ ($$(du -h $@ | cut -f1)) — key stripped for the Web Store"
 
 $(FIREFOX_ZIP): $(FIREFOX_DIR)/.build-stamp | $(ART)
 	@rm -f $@

@@ -10,9 +10,15 @@
 // and the icon carries *state* — the same mark in two tints — which is exactly the
 // kind of thing that rots when maintained as eight hand-exported files.
 //
-// The rasteriser is deliberately tiny: filled polygons and discs, 4x supersampled,
-// which is all a stroked "W" on a rounded square needs. No anti-aliasing subtleties
-// beyond the box filter, because at 16px nothing finer survives anyway.
+// The rasteriser is deliberately tiny: stroked polylines, rings and rounded squares,
+// 4x supersampled. No anti-aliasing subtleties beyond the box filter, because at 16px
+// nothing finer survives anyway.
+//
+// The mark is wudict's own, ported from the server's favicon.svg (identical to
+// pages/docs/assets/logo.svg) rather than invented here: same geometry, same tile
+// colour, so the toolbar button and the page it opens are visibly one product. The
+// SVG's 32-unit viewBox maps to this file's unit square by /32. Keep them in step —
+// a divergence is only visible to a user with both open, which is every user.
 //
 // Usage: node tools/make-icons.mjs <out-dir>
 
@@ -28,25 +34,60 @@ if (!outDir) {
 
 const SIZES = [16, 32, 48, 128];
 
-// `on` is the options page accent; `off` is a neutral the browser's own greyed
-// affordances sit next to without clashing. Disconnected is a badge, not a third
-// icon: two independent facts on one 16px square is one too many.
+// `on` is the server's tile colour (#4c6680); `off` is the same hue with the colour
+// drained out of it rather than an unrelated grey, so the two states are one mark in
+// two moods. The white stroke clears 5.97:1 on `on` and 3.63:1 on `off` at its 235
+// alpha — over the 3:1 a non-text mark owes, and separated by a 1.5x luminance step,
+// which is what makes them tellable apart at 16px and to a colourblind eye alike.
+// Disconnected is a badge, not a third icon: two independent facts on one 16px square
+// is one too many.
 const STATES = {
-  on: { bg: [11, 92, 173, 255], fg: [255, 255, 255, 255] },
-  off: { bg: [126, 126, 126, 255], fg: [255, 255, 255, 235] },
+  on: { bg: [76, 102, 128, 255], fg: [255, 255, 255, 255] },
+  off: { bg: [125, 128, 133, 255], fg: [255, 255, 255, 235] },
 };
 
-// Unit-square geometry, scaled per size. The W is a polyline stroked with round
-// joins; the strokes are wide because thin ones vanish at 16px.
-const W_POINTS = [
-  [0.2, 0.29],
-  [0.355, 0.73],
-  [0.5, 0.45],
-  [0.645, 0.73],
-  [0.8, 0.29],
+// The mark, in unit coordinates = favicon.svg's 32-unit values / 32.
+//
+//   <path d="M4 7h13M4 13h8" stroke-width="2"/>          two text lines
+//   <circle cx="20" cy="18" r="5" stroke-width="2"/>     lens
+//   <path d="M24 22 27.5 25.5" stroke-width="3"/>        handle
+//
+// Three constraints fix these numbers, and an edit that ignores them costs legibility
+// at the only size that matters:
+//
+//   Centred. Ink bbox x[3,29] y[6,27] — margins 3/3/6/5, the extra unit at the top
+//   answering a lens that carries its weight low. The mark this replaced sat four
+//   units low and one right, with its handle 0.78px from the tile's corner radius.
+//
+//   13 and 8. The text lines are the Fibonacci pair: 1.625, within 0.4% of phi, and
+//   integers — which phi is not. On a 16px grid an irrational ratio is a guarantee of
+//   landing between pixels, so the approximation is not a compromise, it is the point.
+//
+//   Even widths on odd centres. A 32-unit coordinate halves at 16px, so a horizontal
+//   stroke is crisp only when y/2 +/- w/4 is whole: y=7 and y=13 at width 2 give pixel
+//   edges 3..4 and 6..7 exactly. That is also why the line gap is 6 and not the
+//   Fibonacci 5 — parity is a real constraint and numerology is not. Circles and the
+//   45-degree handle can never snap; they are why the 4x supersample stays.
+const LINES = [
+  [
+    [4 / 32, 7 / 32],
+    [17 / 32, 7 / 32],
+  ],
+  [
+    [4 / 32, 13 / 32],
+    [12 / 32, 13 / 32],
+  ],
 ];
-const W_WIDTH = 0.115;
-const RADIUS = 0.22;
+const LINE_WIDTH = 2 / 32;
+const LENS = { cx: 20 / 32, cy: 18 / 32, r: 5 / 32, width: 2 / 32 };
+// Starts inside the ring's annulus (5.66 from the centre, band 4..6), so the join is
+// a union of two solids and needs no mitre.
+const HANDLE = [
+  [24 / 32, 22 / 32],
+  [27.5 / 32, 25.5 / 32],
+];
+const HANDLE_WIDTH = 3 / 32;
+const RADIUS = 7 / 32; // the SVG's rx
 const SS = 4; // supersample factor
 
 // ------------------------------------------------------------------ rasteriser
@@ -124,6 +165,16 @@ function segmentDistance(px, py, [ax, ay], [bx, by]) {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
+/** Stroked circle: the annulus between two radii, i.e. an unfilled lens. */
+function ring({ cx, cy, r, width }) {
+  const inner = r - width / 2;
+  const outer = r + width / 2;
+  return (x, y) => {
+    const d = Math.hypot(x - cx, y - cy);
+    return d >= inner && d <= outer;
+  };
+}
+
 /** Polyline stroked with round caps and joins — free, given the distance form. */
 function polyline(points, width) {
   const r = width / 2;
@@ -198,7 +249,9 @@ for (const [state, colours] of Object.entries(STATES)) {
     // A hairline inset keeps the rounded corners from being clipped flat by the
     // pixel grid at 16px.
     fill(canvas, colours.bg, roundedSquare(0.03, RADIUS));
-    fill(canvas, colours.fg, polyline(W_POINTS, W_WIDTH));
+    for (const line of LINES) fill(canvas, colours.fg, polyline(line, LINE_WIDTH));
+    fill(canvas, colours.fg, ring(LENS));
+    fill(canvas, colours.fg, polyline([HANDLE[0], HANDLE[1]], HANDLE_WIDTH));
     const path = join(outDir, `${state}-${size}.png`);
     await writeFile(path, encodePng(canvas));
     written.push(path);

@@ -80,15 +80,15 @@ function renderHealth(health, baseUrl) {
     setHealth('', `Not checked · ${short(baseUrl)}`);
   }
   $('healthText').title = health.message || '';
-  void refreshGrantButton(health);
 }
 
 /**
  * Three failures, three different fixes — "cannot reach" is only one of them and
  * saying it for the other two sends the user to look at the wrong thing.
- * `no-cors-grant` means wudict answered and refused *us*: an older server, or a
- * `BROWSER_EXTENSIONS` list this extension is not on. The tooltip carries the long
- * form; this line has one row.
+ * `no-cors-grant` means wudict answered and refused *us*: a server too old to allow
+ * extension origins, or a `BROWSER_EXTENSIONS` list this extension is not on. Both
+ * are fixed on the server — update it. The tooltip carries the long form; this line
+ * has one row.
  */
 function downText(reason, baseUrl) {
   if (reason === 'no-cors-grant') return `${short(baseUrl)} is not answering extensions`;
@@ -163,48 +163,6 @@ function renderSearchHint(target) {
 function short(baseUrl) {
   return baseUrl.replace(/^https?:\/\//, '');
 }
-
-// ---------------------------------------------------------------- permission
-
-/**
- * The fallback transport, offered only when it is the thing that would help.
- *
- * The extension declares no host permission (D69): it reads wudict on the server's
- * CORS grant, so nothing it does puts a loopback URL in the page and no browser asks
- * the user about the site they are reading. A server that predates that grant, or
- * one whose `BROWSER_EXTENSIONS` list does not include this extension, refuses us —
- * and holding the host permission bypasses CORS entirely. Requesting it needs a user
- * gesture, which a background worker never has and this panel always does.
- *
- * Hidden when things work, and hidden when nothing is listening: a permission cannot
- * start a server, and a button that will not help is worse than no button.
- */
-async function refreshGrantButton(health) {
-  const button = $('grant');
-  const wouldHelp = health.status === HEALTH.DOWN && health.reason !== 'unreachable';
-  if (!wouldHelp) {
-    button.hidden = true;
-    return;
-  }
-  try {
-    const origins = [`${new URL(state.settings.baseUrl).origin}/*`];
-    button.hidden = await api.permissions.contains({ origins });
-  } catch {
-    button.hidden = true;
-  }
-}
-
-$('grant').addEventListener('click', async () => {
-  try {
-    const origins = [`${new URL(state.settings.baseUrl).origin}/*`];
-    const granted = await api.permissions.request({ origins });
-    if (granted) await ask({ type: 'wudict:probe' });
-  } catch (error) {
-    setHealth('down', error.message);
-  }
-  // Firefox can close the panel to show its doorhanger; if it survived, repaint.
-  await load({ probe: true });
-});
 
 // ------------------------------------------------------------------- actions
 

@@ -233,14 +233,19 @@ content script bytes (see this extension's `src/background/media.js`), and play
 audio in an offscreen document rather than in the page. Then no loopback URL
 ever reaches the page, and no prompt ever appears.
 
-A host permission still works and still bypasses CORS — keep it as an
-`optional_host_permissions` fallback for a wudict older than this release, or
-one whose `BROWSER_EXTENSIONS` list does not include you.
+A host permission would also work and would bypass CORS, but this extension
+declares none — not even an optional one. The server's CORS grant is the single
+supported transport: a wudict too old to answer extension origins, or one whose
+`BROWSER_EXTENSIONS` list omits this extension, is fixed on the server side by
+updating it or widening that list. Holding a host permission invites putting
+loopback URLs back in the page, which is exactly what raises the Local Network
+Access prompt this design exists to avoid.
 
 The residual, accepted deliberately: any extension the user has installed can
-read their dictionaries. It could have declared the host permission itself, so
-the grant adds no capability that was not already one prompt away, and
-`BROWSER_EXTENSIONS` narrows it to a named list for anyone who wants that.
+read their dictionaries. Any of them could have declared a host permission
+itself, so the CORS grant adds no capability that was not already one prompt
+away, and `BROWSER_EXTENSIONS` narrows it to a named list for anyone who wants
+that.
 
 ---
 

@@ -12,16 +12,16 @@
 
 ## Install
 <p align="center">
-  <a href="https://chromewebstore.google.com/">
-    <img alt="Add to Chrome — Chrome Web Store" src="https://img.shields.io/badge/Add%20to%20Chrome-Chrome%20Web%20Store-1a73e8?style=for-the-badge&logo=googlechrome&logoColor=white" />
+  <a href="https://chromewebstore.google.com/detail/bknaaoffefipfnpefmkbipcdemljbhjh">
+    <img alt="Available in the Chrome Web Store" height="60" src="docs/assets/chrome-web-store-badge.png" />
   </a>
-  &nbsp;&nbsp;
-  <a href="https://addons.mozilla.org/">
-    <img alt="Add to Firefox — Firefox Add-ons" src="https://img.shields.io/badge/Add%20to%20Firefox-Firefox%20Add--ons-FF7139?style=for-the-badge&logo=firefox&logoColor=white" />
+  &nbsp;&nbsp;&nbsp;
+  <a href="https://addons.mozilla.org/firefox/addon/wudict-hover/">
+    <img alt="Get the Add-on for Firefox" height="60" src="docs/assets/firefox-get-the-addon.svg" />
   </a>
 </p>
 
-> Store listing links are wired here at release — swap the `href`s and the badges keep rendering. Until then, everything in §Dev installs and runs identically.
+> Both links are final: Chrome by item ID (`bknaaoffefipfnpefmkbipcdemljbhjh`), Firefox by AMO slug (`wudict-hover`), locale-neutral so the browser picks the language. Each resolves once its listing is approved and public. Both badges are the vendors' own artwork, committed under `docs/assets/` (see the note there); neither store guideline allows hot-linking. Until the listings are live, everything in §Dev installs and runs identically.
 
 **Before you click:** make sure wudict is running — the extension is a frontend, not a dictionary by itself.
 
@@ -60,7 +60,7 @@ The selection menu exists for exactly the case where hover is unwanted: turn hov
 
 Clicking the icon opens a panel, not the options page. It carries what changes often or is needed when something is wrong; everything else is one click away in its footer.
 
-- **Connection** — live: connected · *n* dictionaries, or the failure named for what it is — **Cannot reach …** (nothing listening) or **… is not answering extensions** (a wudict older than this release) — with **Retry**, and, only in that second case, a **Grant access** button that switches to the host-permission fallback in place
+- **Connection** — live: connected · *n* dictionaries, or the failure named for what it is — **Cannot reach …** (nothing listening) or **… is not answering extensions** (a wudict too old to allow extension origins — update it) — with **Retry**
 - **Search box** — opens the full wudict page for the word, all dictionaries
 - **Hold key** — the setting people actually change
 - **This site** — pause hover on this host without touching the master switch; the list of paused sites is on the options page
@@ -104,7 +104,7 @@ wudict does **no morphology**: `running` is found only if a dictionary stores it
 
 | Setting | Default | Notes |
 |---|---|---|
-| Base URL | `http://127.0.0.1:6888` | both host and port are configurable in wudict; **Test connection** verifies. **Grant access** appears only if that test finds a server that will not answer extensions — it takes the host permission as a fallback |
+| Base URL | `http://127.0.0.1:6888` | both host and port are configurable in wudict; **Test connection** verifies, and names which of the three failures it is |
 | Enabled | on | master switch (also in the toolbar panel) |
 | Hold key | Option / Alt | also in the toolbar panel; named for the machine you are on — ⌥ Option, ⌃ Control, ⇧ Shift, ⌘ Command on macOS, Alt/Ctrl/Shift elsewhere. Command is offered on macOS only: Windows and most Linux desktops take that key before the page sees it. A setting synced in from a Mac is still shown, flagged, and never rewritten behind your back |
 | Hover delay | 200 ms | debounce before lookup fires |
@@ -126,7 +126,7 @@ wudict does **no morphology**: `running` is found only if a dictionary stores it
 | Grey icon | Paused — the panel's master switch or its **this site** switch |
 | Amber **!** on the icon | wudict is not reachable → panel → **Retry** |
 | Right-click item missing | Turn it back on in **Options → Searching**; it never appears without a text selection |
-| "is not answering extensions" | wudict is running but predates the extension grant, or its `BROWSER_EXTENSIONS` list omits this extension → update wudict (best), widen the list, or take the fallback: options **Grant access** |
+| "is not answering extensions" | wudict is running but is too old to allow extension origins, or its `BROWSER_EXTENSIONS` list omits this extension → update wudict, or widen that list. There is no client-side workaround: the CORS grant is the only supported transport |
 | A page asks about "other apps and services on this device" | Not this extension: it puts no local address in the page. Something else on that tab is probing your local network |
 | Word shows nothing | Dictionary lacks the word (no morphology) → open the word in wudict to check |
 | Popup closes immediately | Pointer left it; or you scrolled the page (by design — reposition and it reopens) |
@@ -140,7 +140,7 @@ Open source — the entire extension is readable and buildable by anyone.
 
 **No data collection. No analytics. No tracking. No profiling. No third-party data.**
 
-Nothing leaves your machine: the only network traffic is a dictionary lookup to the wudict server **you** run. Declared permissions are `storage`, `contextMenus` and (Chrome) `offscreen` — no host, no site, no loopback address. The extension does not read any page's content; it reads the one word under your pointer.
+Nothing leaves your machine: the only network traffic is a dictionary lookup to the wudict server **you** run. Declared permissions are `storage`, `contextMenus` and (Chrome) `offscreen` — no host, no site, no loopback address, and no optional permissions either: there is nothing the extension can ask for later. The extension does not read any page's content; it reads the one word under your pointer.
 
 ---
 
@@ -229,7 +229,7 @@ page ──mousemove──► content script ──port──► service worker 
 - Release flow: `make release` → `clean check package checksums`; signing/publishing are separate steps requiring env-sourced credentials (`WEB_EXT_API_KEY`/`WEB_EXT_API_SECRET`, `CWS_*`) — never make variables, and never on the command line.
 - `src/manifest.chrome.json` pins `key`, so the unpacked extension id is the same on every machine — `BROWSER_EXTENSIONS` can name it, and stored settings survive a reinstall. It changed once, at this release: a dev profile loaded from an earlier build gets a new id and starts from defaults.
 - Diagnostics distinguish three states, because they need three different fixes: `unreachable` (a `mode:'no-cors'` probe fails too — nothing is listening), `no-cors-grant` (the probe succeeds, the real fetch does not — the server is there and will not answer *us*), and ok. A CORS-shaped rejection carries no detail by design; the second request is what makes the two tellable apart, and only "Test connection" and the panel's **Retry** pay for it.
-- The host permission survives as `optional_host_permissions` and is offered only in the `no-cors-grant` case. It bypasses CORS entirely, which is why it still works against an older server — and why it is not the default: holding it invites putting loopback URLs back in the page, which is what raises the Local Network Access prompt.
+- No host permission is declared, optional or otherwise. A host permission would bypass CORS and would therefore work against a server too old to grant extension origins, but holding one invites putting loopback URLs back in the page — which is what raises the Local Network Access prompt this design exists to avoid. Only wudict builds that answer extension origins are supported; `no-cors-grant` is a diagnosis, not a state the extension can work around.
 </details>
 
 ---
