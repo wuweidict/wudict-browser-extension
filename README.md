@@ -1,4 +1,4 @@
-# wudict Hover
+# wuDict Hover
 
 
 ## Install
@@ -17,7 +17,10 @@ Click a badge below to install:
 
 **Requirements** make sure [wuDict server](https://github.com/wuweidict/wudict) is running — the extension is a frontend, not a dictionary by itself.
 
-**wudict Hover** is a free browser extension — Chrome & Firefox — that shows dictionary definitions when you hover over a word. It reads from [**wudict**](https://github.com/wuweidict/wudict), a dictionary for MDict (.mdx), AARD2 (.slob), Babylon (.bgl), Stardict (.ifo), ABBYY Lingvo (.dsl) which must be running on your computer or another host on your local network.
+---
+## What is wuDict Hover and 
+
+**wudict Hover** is a free browser extension — Chrome & Firefox — that shows dictionary definitions when you hover over a word. It a companion browser extension for the [**wudict app**](https://github.com/wuweidict/wudict), a web app dictionary for MDict (.mdx), AARD2 (.slob), Babylon (.bgl), Stardict (.ifo), ABBYY Lingvo (.dsl) which must be running on your computer (or another host on your local network).
 
 - **Works with:** Chrome ≥ 116, Firefox ≥ 128 (MV3)
 - **Needs:** a running [**wudict** server](https://github.com/wuweidict/wudict) — everything is fetched from **your machine, `http://127.0.0.1:6888`** (configurable). No cloud, no account, no tracking.
