@@ -21,9 +21,7 @@
   </a>
 </p>
 
-> Both links are final: Chrome by item ID (`bknaaoffefipfnpefmkbipcdemljbhjh`), Firefox by AMO slug (`wudict-hover`), locale-neutral so the browser picks the language. Each resolves once its listing is approved and public. Both badges are the vendors' own artwork, committed under `docs/assets/` (see the note there); neither store guideline allows hot-linking. Until the listings are live, everything in §Dev installs and runs identically.
-
-**Before you click:** make sure wudict is running — the extension is a frontend, not a dictionary by itself.
+**Requirements** make sure wudict is running — the extension is a frontend, not a dictionary by itself.
 
 | Step | What happens | Details |
 |---|---|---|
