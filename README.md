@@ -1,16 +1,10 @@
 # wudict Hover
 
-**wudict Hover** is a free browser extension — Chrome & Firefox — that shows dictionary definitions when you hover over a word. It reads from [**wudict**](https://github.com/wuweidict/wudict), a dictionary for MDict (.mdx), AARD2 (.slob), Babylon (.bgl), Stardict (.ifo), ABBYY Lingvo (.dsl) which must be running on your computer or another host on your local network.
-
-- **Works with:** Chrome ≥ 116, Firefox ≥ 128 (MV3)
-- **Needs:** a running [**wudict** server](https://github.com/wuweidict/wudict) — everything is fetched from **your machine, `http://127.0.0.1:6888`** (configurable). No cloud, no account, no tracking.
-- **Free & open source:** no data collection, no analytics, no tracking, no profiling, no third-party cookies.
-- **Asks for nothing:** the install prompt names no site and no host. The extension holds no permission to reach `127.0.0.1` — wudict answers it by name instead (see *How it works*), so your browser never asks whether *the page you are reading* may talk to your local network.
-- **Current version:** v0.1.0
-
----
 
 ## Install
+
+Click a badge below to install:
+
 <p align="center">
   <a href="https://chromewebstore.google.com/detail/bknaaoffefipfnpefmkbipcdemljbhjh">
     <img alt="Available in the Chrome Web Store" height="60" src="docs/assets/chrome-web-store-badge.png" />
@@ -21,7 +15,18 @@
   </a>
 </p>
 
-**Requirements** make sure wudict is running — the extension is a frontend, not a dictionary by itself.
+**Requirements** make sure [wuDict server](https://github.com/wuweidict/wudict) is running — the extension is a frontend, not a dictionary by itself.
+
+**wudict Hover** is a free browser extension — Chrome & Firefox — that shows dictionary definitions when you hover over a word. It reads from [**wudict**](https://github.com/wuweidict/wudict), a dictionary for MDict (.mdx), AARD2 (.slob), Babylon (.bgl), Stardict (.ifo), ABBYY Lingvo (.dsl) which must be running on your computer or another host on your local network.
+
+- **Works with:** Chrome ≥ 116, Firefox ≥ 128 (MV3)
+- **Needs:** a running [**wudict** server](https://github.com/wuweidict/wudict) — everything is fetched from **your machine, `http://127.0.0.1:6888`** (configurable). No cloud, no account, no tracking.
+- **Free & open source:** no data collection, no analytics, no tracking, no profiling, no third-party cookies.
+- **Asks for nothing:** the install prompt names no site and no host. The extension holds no permission to reach `127.0.0.1` — wudict answers it by name instead (see *How it works*), so your browser never asks whether *the page you are reading* may talk to your local network.
+- **Current version:** v0.1.0
+
+---
+
 
 | Step | What happens | Details |
 |---|---|---|
