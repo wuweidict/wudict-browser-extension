@@ -1,6 +1,6 @@
 wudict Hover — changelog
 
-Unreleased
+0.1.2
 
 Fixed
 - If wudict skips a dictionary to save memory, the extension now searches
