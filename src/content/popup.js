@@ -22,19 +22,50 @@ import { sanitizeArticle } from './sanitize.js';
 const HOST_ID = 'wudict-hover-host';
 const MARGIN = 12;
 
-// Static markup we author, not article HTML — assigned with innerHTML only here.
-const ICON_ONE = `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-  <path d="M6.5 3H3.5A1.5 1.5 0 0 0 2 4.5v8A1.5 1.5 0 0 0 3.5 14h8a1.5 1.5 0 0 0 1.5-1.5v-3"
-    fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-  <path d="M9.5 2.5H14v4.5M14 2.5 7.5 9"
-    fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>`;
+// The two header icons, as path data. Built with createElementNS rather than parsed
+// from markup, so nothing in the content script assigns innerHTML at all.
+const ICONS = {
+  one: {
+    stroke: 1.5,
+    paths: [
+      'M6.5 3H3.5A1.5 1.5 0 0 0 2 4.5v8A1.5 1.5 0 0 0 3.5 14h8a1.5 1.5 0 0 0 1.5-1.5v-3',
+      'M9.5 2.5H14v4.5M14 2.5 7.5 9',
+    ],
+  },
+  all: {
+    stroke: 1.4,
+    paths: ['M2 5.2 8 2.2l6 3-6 3z', 'M2 8.4 8 11.4l6-3M2 11.4 8 14.4l6-3'],
+  },
+};
 
-const ICON_ALL = `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-  <path d="M2 5.2 8 2.2l6 3-6 3z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
-  <path d="M2 8.4 8 11.4l6-3M2 11.4 8 14.4l6-3"
-    fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>`;
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function icon({ stroke, paths }) {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  for (const [name, value] of [
+    ['viewBox', '0 0 16 16'],
+    ['width', '14'],
+    ['height', '14'],
+    ['aria-hidden', 'true'],
+  ]) {
+    svg.setAttribute(name, value);
+  }
+  for (const d of paths) {
+    const path = document.createElementNS(SVG_NS, 'path');
+    for (const [name, value] of [
+      ['d', d],
+      ['fill', 'none'],
+      ['stroke', 'currentColor'],
+      ['stroke-width', String(stroke)],
+      ['stroke-linecap', 'round'],
+      ['stroke-linejoin', 'round'],
+    ]) {
+      path.setAttribute(name, value);
+    }
+    svg.appendChild(path);
+  }
+  return svg;
+}
 
 // How far outside the panel a slot is hydrated. Article images should be there by
 // the time they are scrolled to, without fetching the whole entry's media for a
@@ -335,13 +366,13 @@ export function createPopup({ onMore, onEnter, onLeave, onOpen }) {
 
     if (fromCache) bar.append(text('span', 'cached', 'meta'));
 
-    bar.append(actionLink('one', 'Open this dictionary’s full entry', ICON_ONE));
-    bar.append(actionLink('all', 'Search all dictionaries', ICON_ALL));
+    bar.append(actionLink('one', 'Open this dictionary’s full entry', ICONS.one));
+    bar.append(actionLink('all', 'Search all dictionaries', ICONS.all));
 
     return bar;
   }
 
-  function actionLink(act, label, icon) {
+  function actionLink(act, label, glyph) {
     const link = document.createElement('a');
     link.className = 'act';
     link.dataset.act = act;
@@ -349,8 +380,7 @@ export function createPopup({ onMore, onEnter, onLeave, onOpen }) {
     link.title = label;
     link.setAttribute('role', 'button');
     link.setAttribute('aria-label', label);
-    // Static, authored markup — never article HTML.
-    link.innerHTML = icon;
+    link.appendChild(icon(glyph));
     return link;
   }
 

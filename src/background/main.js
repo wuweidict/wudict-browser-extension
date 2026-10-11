@@ -26,6 +26,7 @@ import {
   isForBaseUrl,
   labelFor,
   loadRegistry,
+  resolveByName,
   saveRegistry,
 } from '../common/dicts.js';
 import { play as playHere, stop as stopHere } from '../common/player.js';
@@ -142,6 +143,8 @@ async function refreshRegistry(baseUrl) {
       ? { ...kept, fetchedAt: Date.now() }
       : buildRegistry({ baseUrl, ...answer });
     await saveRegistry(next);
+    // Best effort: a refused settings write must not fail the refresh itself.
+    if (!answer.notModified && kept) await followMovedDicts(baseUrl, kept, next).catch(() => {});
     // A base-URL change while this was in flight makes it someone else's answer.
     if ((await currentSettings()).baseUrl === baseUrl) registry = next;
     return next;
@@ -154,6 +157,25 @@ async function refreshRegistry(baseUrl) {
   } finally {
     if (registryFetch === entry) registryFetch = null;
   }
+}
+
+/**
+ * Keep the user's chosen dictionaries chosen across a move. Ids derive from paths,
+ * so a dictionary that moved has a new id under its old name; without this the
+ * choice silently stops applying to it.
+ */
+async function followMovedDicts(baseUrl, previous, next) {
+  const settings = await currentSettings();
+  if (settings.baseUrl !== baseUrl || settings.dicts.length === 0) return;
+
+  const known = new Set(next.dicts.map((dict) => dict.id));
+  const stale = settings.dicts.filter((dictId) => !known.has(dictId));
+  if (stale.length === 0) return;
+
+  const remap = resolveByName(previous, next, stale);
+  if (remap.size === 0) return;
+  const dicts = [...new Set(settings.dicts.map((dictId) => remap.get(dictId) ?? dictId))];
+  await setSettings({ dicts });
 }
 
 // --------------------------------------------------------------------- lookups
@@ -335,31 +357,13 @@ async function attemptCandidate({
 /** The network half of `attemptCandidate`, run by at most one caller at a time. */
 async function streamCandidate({ post, id, baseUrl, dicts, query, slotsFor, signal, append }) {
   let committed = false;
-  let complete = false;
   let slots = null;
   let buffered = [];
-  // A miss is provisional until `end`: the server's lemma wave may still answer
-  // that slot. Caching it any earlier would turn a cut-off stream into a cached
-  // miss that outlives the word.
-  const misses = new Map();
+  const answered = new Set();
+  const deferred = [];
 
-  for await (const frame of search(baseUrl, { ...query, dicts }, { signal })) {
-    if (frame.t === 'begin') {
-      slots = frame.slots;
-      const dropped = droppedIds(dicts, slots);
-      if (dropped.length > 0) {
-        // Ids derive from paths, so a dropped id means the registry is stale.
-        void refreshRegistry(baseUrl).catch(() => {});
-      }
-      continue;
-    }
-
-    if (frame.t === 'end') {
-      complete = true;
-      continue;
-    }
-    if (frame.t !== 'hit') continue;
-
+  /** Cache, then post — or hold until a result commits the lookup. */
+  function accept(i, frame, misses) {
     const entry = {
       name: frame.name,
       outcome: frame.outcome,
@@ -372,21 +376,22 @@ async function streamCandidate({ post, id, baseUrl, dicts, query, slotsFor, sign
       case OUTCOME.RESULTS:
       case OUTCOME.SKIPPED:
         // Final and stable: a capability does not change between two hovers.
-        misses.delete(key);
+        misses?.delete(key);
         cache.set(key, entry);
         break;
       case OUTCOME.EMPTY:
-        misses.set(key, entry);
+        misses?.set(key, entry);
         break;
       default:
         // ERROR and DEFERRED are transient (a timeout, the memory cap). Cached,
         // they would outlive their cause; uncached, the next hover asks again.
         break;
     }
+    answered.add(i);
 
-    const payload = { type: HIT, id, i: frame.i, dict: frame.dict, ...entry };
+    const payload = { type: HIT, id, i, dict: frame.dict, ...entry };
     // A lemma hit replaces its slot's miss; never paint the miss first.
-    if (frame.morph) buffered = buffered.filter((held) => held.i !== frame.i);
+    if (frame.morph) buffered = buffered.filter((held) => held.i !== i);
 
     if (!committed && frame.outcome === OUTCOME.RESULTS) {
       committed = true;
@@ -408,9 +413,50 @@ async function streamCandidate({ post, id, baseUrl, dicts, query, slotsFor, sign
     else buffered.push(payload);
   }
 
-  // Misses are cached too: without that, a word whose chain ends in nothing
-  // re-probes the server on every crossing. Only from a complete answer.
-  if (complete) for (const [key, entry] of misses) cache.set(key, entry);
+  /**
+   * One stream into our slots; `slotOf` maps its `i` to ours. A miss is provisional
+   * until `end` — the server's lemma wave may still answer that slot — so misses
+   * are cached only from a stream that completed: caching any earlier would turn a
+   * cut-off stream into a cached miss that outlives the word.
+   */
+  async function consume(names, slotOf, first) {
+    const misses = new Map();
+    let complete = false;
+    for await (const frame of search(baseUrl, { ...query, dicts: names }, { signal })) {
+      if (frame.t === 'begin') {
+        if (!first) continue;
+        slots = frame.slots;
+        // Ids derive from paths, so a dropped id means the registry is stale.
+        if (droppedIds(names, slots).length > 0) void refreshRegistry(baseUrl).catch(() => {});
+      } else if (frame.t === 'end') {
+        complete = true;
+      } else if (frame.t === 'hit') {
+        const i = slotOf(frame.i);
+        // Held back rather than painted as "not searched": it is about to be.
+        if (first && frame.outcome === OUTCOME.DEFERRED) deferred.push({ i, frame });
+        else accept(i, frame, misses);
+      }
+    }
+    // Misses are cached too: without that, a word whose chain ends in nothing
+    // re-probes the server on every crossing.
+    if (complete) for (const [key, entry] of misses) cache.set(key, entry);
+  }
+
+  await consume(dicts, (i) => i, true);
+
+  // A slot the server's memory cap declined is searched again on its own: naming
+  // one dictionary is a direct demand the server never defers. One at a time,
+  // because the cap exists to bound memory and a burst would defeat it.
+  for (const { i, frame } of deferred) {
+    if (signal.aborted) break;
+    try {
+      await consume([frame.dict], () => i, false);
+    } catch (error) {
+      if (signal.aborted || error.name === 'AbortError') throw error;
+    }
+    // Still nothing for it: say it was not searched, rather than leave it pending.
+    if (!answered.has(i)) accept(i, frame, null);
+  }
 
   return committed ? { fromCache: false } : false;
 }
@@ -425,7 +471,14 @@ function searchKey(baseUrl, dicts, { q, mode, n, format }) {
  * already on screen (the "more" flow).
  */
 function resolveDicts(message, current, mode) {
-  if (Array.isArray(message.dicts) && message.dicts.length > 0) return message.dicts;
+  if (Array.isArray(message.dicts) && message.dicts.length > 0) {
+    // An id the server no longer lists would be dropped by it anyway, and would keep
+    // every lookup off the cache, which replays only when every id is present. If
+    // none of the chosen ones survive, the defaults below are better than nothing.
+    const known = new Set(current.dicts.map((dict) => dict.id));
+    const live = message.dicts.filter((dictId) => known.has(dictId));
+    if (live.length > 0) return live;
+  }
 
   const exclude = new Set(message.exclude ?? []);
   const capable = defaultSelection(current, { mode, limit: Infinity });

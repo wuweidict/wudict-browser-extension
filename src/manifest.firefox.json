@@ -8,26 +8,18 @@
       "id": "wudict-hover@localhost",
       "strict_min_version": "128.0",
       "data_collection_permissions": {
-        "required": [
-          "none"
-        ]
+        "required": ["none"]
       }
     }
   },
   "background": {
-    "scripts": [
-      "background/main.js"
-    ],
+    "scripts": ["background/main.js"],
     "type": "module"
   },
   "content_scripts": [
     {
-      "matches": [
-        "<all_urls>"
-      ],
-      "js": [
-        "content.js"
-      ],
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
       "run_at": "document_idle",
       "all_frames": true
     }
@@ -72,8 +64,5 @@
       "description": "Pause or resume hover lookup on this site"
     }
   },
-  "permissions": [
-    "storage",
-    "contextMenus"
-  ]
+  "permissions": ["storage", "contextMenus"]
 }

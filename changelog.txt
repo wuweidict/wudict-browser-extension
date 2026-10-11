@@ -1,20 +1,43 @@
 wudict Hover — changelog
 
+Unreleased
+
+Fixed
+- If wudict skips a dictionary to save memory, the extension now searches
+  that dictionary again by itself. The popup shows the link to wudict only
+  if this second search also fails.
+- If you move a dictionary to a different folder, your selection in Options
+  now stays on that dictionary.
+- A selected dictionary that wudict no longer has does not stop the cache.
+  Before this fix, each lookup went to wudict again.
+
 0.1.1
 
 Fixed
 - Inflected words now show a definition. Examples: "mice", "went", "houses".
   Before this fix, the popup did not open for these words.
 - A lookup of an inflected word no longer shows "Cannot reach wudict".
+- "More dictionaries" no longer closes the popup when it finds nothing.
+- The extension no longer shows "Cannot reach wudict" when the server
+  sends data in an unexpected format.
+- After you change the server address, old results no longer show.
+- Some cross-reference links opened the wrong entry. This is fixed.
 
 New
 - If a dictionary does not list the word, wudict finds its base form.
   The popup shows the change above the entry, for example "mice → mouse".
 - This feature needs a wudict version with lemmatization. English is built in.
   You can install other languages in wudict, under Lemmatization.
+- If wudict skips a dictionary to save memory, the popup tells you.
+  It also gives a link to search that dictionary in wudict.
+- The Options page marks dictionaries that wudict cannot open.
+- If wudict refuses the host name, "Test connection" tells you what to change.
 
 Changed
 - The Options page and the help text explain the base-form lookup.
+- The dictionary list refreshes faster when nothing has changed.
+- The automatic dictionary selection no longer changes between refreshes.
+  Your selection can change one time after this update.
 
 Privacy
 - No change. The extension sends lookups only to your local wudict server.

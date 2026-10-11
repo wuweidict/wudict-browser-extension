@@ -121,8 +121,7 @@ export function keyChoices(os, current) {
       // Mac users read ⌥⌃⇧⌘ faster than the words, and the panel is 340px wide.
       // No other platform has a glyph convention worth inventing one for, so
       // elsewhere this is the name — abbreviated only where the name does not fit.
-      short:
-        value === 'none' ? 'None' : (label?.symbol ?? label?.short ?? label?.name ?? value),
+      short: value === 'none' ? 'None' : (label?.symbol ?? label?.short ?? label?.name ?? value),
       long: value === 'none' ? 'No key — hover alone' : compose(label, value),
     };
   });

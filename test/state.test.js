@@ -95,10 +95,9 @@ describe('normalizeSettings — new fields', () => {
   it('discards junk in siteRules rather than trusting storage', () => {
     assert.deepEqual(normalizeSettings({ siteRules: null }).siteRules, {});
     assert.deepEqual(normalizeSettings({ siteRules: ['a'] }).siteRules, {});
-    assert.deepEqual(
-      normalizeSettings({ siteRules: { a: false, b: true, '': false } }).siteRules,
-      { a: false },
-    );
+    assert.deepEqual(normalizeSettings({ siteRules: { a: false, b: true, '': false } }).siteRules, {
+      a: false,
+    });
   });
 });
 

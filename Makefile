@@ -26,6 +26,10 @@ BASE_URL  ?= http://127.0.0.1:6888
 # Firefox: AMO channel for `make sign-firefox`. `unlisted` self-distributes a
 # signed xpi; `listed` submits for public review (see `publish-firefox`).
 AMO_CHANNEL ?= unlisted
+# A listed submission waits for Mozilla's review, which can take hours or days, and
+# AMO distributes the signed file itself: return once validation passes. Unlisted
+# signing is automatic and its xpi is the artifact, so that one waits.
+AMO_WAIT = $(if $(filter listed,$(AMO_CHANNEL)),--approval-timeout 0)
 
 # Chrome: local CRX signing key, and the Web Store item to publish to.
 CRX_KEY      ?= chrome-key.pem
@@ -377,7 +381,7 @@ sign-firefox: build-firefox | $(ART) ## Sign the Firefox build via AMO (unlisted
 		exit 1; \
 	fi; \
 	$(WEB_EXT) sign --source-dir $(FIREFOX_DIR) --artifacts-dir $(ART) \
-		--channel $(AMO_CHANNEL)
+		--channel $(AMO_CHANNEL) $(AMO_WAIT)
 
 .PHONY: publish-firefox
 publish-firefox: ## Submit to AMO for public listing (CONFIRM=yes required)
@@ -387,6 +391,7 @@ publish-firefox: ## Submit to AMO for public listing (CONFIRM=yes required)
 		exit 1; \
 	fi
 	@$(MAKE) --no-print-directory sign-firefox AMO_CHANNEL=listed
+	@echo "  submitted v$(VERSION) for review; track it in the AMO Developer Hub."
 
 .PHONY: publish-chrome
 publish-chrome: ## Upload and publish to the Chrome Web Store (CONFIRM=yes required)
