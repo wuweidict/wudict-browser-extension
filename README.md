@@ -1,16 +1,10 @@
-# wudict Hover
+# wuDict Hover
 
-**wudict Hover** is a free browser extension — Chrome & Firefox — that shows dictionary definitions when you hover over a word. It reads from [**wudict**](https://github.com/wuweidict/wudict), a dictionary for MDict (.mdx), AARD2 (.slob), Babylon (.bgl), Stardict (.ifo), ABBYY Lingvo (.dsl) which must be running on your computer or another host on your local network.
-
-- **Works with:** Chrome ≥ 116, Firefox ≥ 128 (MV3)
-- **Needs:** a running [**wudict** server](https://github.com/wuweidict/wudict) — everything is fetched from **your machine, `http://127.0.0.1:6888`** (configurable). No cloud, no account, no tracking.
-- **Free & open source:** no data collection, no analytics, no tracking, no profiling, no third-party cookies.
-- **Asks for nothing:** the install prompt names no site and no host. The extension holds no permission to reach `127.0.0.1` — wudict answers it by name instead (see *How it works*), so your browser never asks whether *the page you are reading* may talk to your local network.
-- **Current version:** v0.1.0
-
----
 
 ## Install
+
+Click a badge below to install:
+
 <p align="center">
   <a href="https://chromewebstore.google.com/detail/bknaaoffefipfnpefmkbipcdemljbhjh">
     <img alt="Available in the Chrome Web Store" height="60" src="docs/assets/chrome-web-store-badge.png" />
@@ -21,9 +15,21 @@
   </a>
 </p>
 
-> Both links are final: Chrome by item ID (`bknaaoffefipfnpefmkbipcdemljbhjh`), Firefox by AMO slug (`wudict-hover`), locale-neutral so the browser picks the language. Each resolves once its listing is approved and public. Both badges are the vendors' own artwork, committed under `docs/assets/` (see the note there); neither store guideline allows hot-linking. Until the listings are live, everything in §Dev installs and runs identically.
+**Requirements** make sure [wuDict server](https://github.com/wuweidict/wudict) is running — the extension is a frontend, not a dictionary by itself.
 
-**Before you click:** make sure wudict is running — the extension is a frontend, not a dictionary by itself.
+---
+## What is wuDict Hover + wuDict Server
+
+**wudict Hover** is a free browser extension — Chrome & Firefox — that shows dictionary definitions when you hover over a word. It is a companion browser extension for the [**wudict server**](https://github.com/wuweidict/wudict), a web dictionary for MDict (.mdx), AARD2 (.slob), Babylon (.bgl), Stardict (.ifo), ABBYY Lingvo (.dsl) that you run locally on your computer (or another host on your local network).
+
+- **Works with:** Chrome ≥ 116, Firefox ≥ 128 (MV3)
+- **Needs:** a running [**wudict** server](https://github.com/wuweidict/wudict) — everything is fetched from **your machine, `http://127.0.0.1:6888`** (configurable). No cloud, no account, no tracking.
+- **Free & open source:** no data collection, no analytics, no tracking, no profiling, no third-party cookies.
+- **Asks for nothing:** the install prompt names no site and no host. The extension holds no permission to reach `127.0.0.1` — wudict answers it by name instead (see *How it works*), so your browser never asks whether *the page you are reading* may talk to your local network.
+- **Current version:** v0.1.0
+
+---
+
 
 | Step | What happens | Details |
 |---|---|---|
