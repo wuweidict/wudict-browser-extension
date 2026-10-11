@@ -97,10 +97,12 @@
           <input id="maxCandidates" type="number" min="1" max="8" />
         </label>
         <p class="hint">
-          wudict does not lemmatise, so a word like <em>running</em> is found only if
-          a dictionary stores it. Fallback attempts try apostrophe, possessive,
-          hyphen and suffix variants — each is one more request, but only for a word
-          that would otherwise show nothing.
+          A word a dictionary does not list is looked up again by its lemma, with
+          wudict's lemma data for the dictionary's language: <em>running</em> finds
+          <em>run</em>. English is built in; install other languages in wudict under
+          Lemmatization. Fallback attempts then try apostrophe, possessive, hyphen and
+          suffix variants: one more request each, only for a word that would
+          otherwise show nothing.
         </p>
       </section>
 

@@ -136,6 +136,7 @@ const STYLES = `
   .body td, .body th { border: 1px solid rgba(0,0,0,0.12); padding: 2px 5px; }
   .body a { color: #0b5cad; }
   .note { padding: 2px 10px 8px; opacity: 0.5; font-style: italic; }
+  .morph { padding: 0 10px 2px; font-size: 12px; opacity: 0.6; }
   .note.error { color: #a12; opacity: 0.85; font-style: normal; }
   .pending { padding: 2px 10px 8px; opacity: 0.4; }
   .more {
@@ -512,7 +513,7 @@ export function createPopup({ onMore, onEnter, onLeave, onOpen }) {
     }
   }
 
-  function hit(groupIndex, { i, name, outcome, results, error }) {
+  function hit(groupIndex, { i, name, outcome, results, error, morph }) {
     const group = groups[groupIndex];
     const slot = group?.elements.get(i);
     if (!slot) return;
@@ -526,6 +527,8 @@ export function createPopup({ onMore, onEnter, onLeave, onOpen }) {
     if (shown === slot.dataset.dict) setHeaderDict(slot.dataset.dict, slot.dataset.name);
 
     if (outcome === OUTCOME.RESULTS) {
+      // The server answered for a different word than the one hovered; say so.
+      if (morph) slot.append(text('div', `${morph.from} → ${morph.to}`, 'morph'));
       for (const result of results) {
         const body = document.createElement('div');
         body.className = 'body';

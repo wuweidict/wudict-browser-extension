@@ -65,6 +65,13 @@ export async function fetchDicts(baseUrl, { signal } = {}) {
  * Yields `{ t: 'begin', slots }` first, then one `{ t: 'hit', ... }` per slot in
  * completion order, and nothing after the stream ends. Hits arrive out of request
  * order by design — render into slots by `i`.
+ *
+ * A slot can then receive ONE more hit: when a single word finds nothing in some
+ * dictionaries, the server searches those again for the word's lemma and announces
+ * it with a `{t:'morph', from, to, lang}` frame. Every hit after that frame is for
+ * `to`, not the typed word, and replaces the slot's miss; it carries `morph` so the
+ * reader can be told. A first-wave hit carries `morph: null`. So a non-results hit
+ * is final only once the stream has ended.
  */
 export async function* search(baseUrl, query, { signal } = {}) {
   const url = buildSearchUrl(baseUrl, query);
@@ -74,6 +81,9 @@ export async function* search(baseUrl, query, { signal } = {}) {
 
   let slots = null;
   const seen = new Set();
+  // Slots already re-answered by a lemma wave, and the wave currently streaming.
+  const relemmatised = new Set();
+  let morph = null;
 
   for await (const frame of readFrames(response)) {
     switch (frame.t) {
@@ -85,7 +95,13 @@ export async function* search(baseUrl, query, { signal } = {}) {
 
       case 'hit': {
         if (slots === null) throw new Error('received a hit before begin');
-        if (seen.has(frame.i)) throw new Error(`slot ${frame.i} produced two hits`);
+        if (seen.has(frame.i)) {
+          // A second hit is legal only once per slot, and only for a lemma.
+          if (morph === null || relemmatised.has(frame.i)) {
+            throw new Error(`slot ${frame.i} produced two hits`);
+          }
+          relemmatised.add(frame.i);
+        }
         seen.add(frame.i);
         yield {
           t: 'hit',
@@ -96,19 +112,33 @@ export async function* search(baseUrl, query, { signal } = {}) {
           outcome: classifyHit(frame),
           results: frame.results ?? [],
           error: frame.error ?? null,
+          morph,
         };
         break;
       }
+
+      case 'morph':
+        // `i` is meaningless here too. Hits after this frame belong to `to`.
+        morph = parseMorph(frame);
+        if (morph === null) throw new Error('malformed morph frame');
+        break;
 
       case 'end':
         return;
 
       default:
-        // The contract fixes `t` at begin|hit|end. A future addition should not
+        // The contract fixes `t` at begin|hit|morph|end. A future addition should not
         // break a lookup, so it is ignored rather than thrown on.
         break;
     }
   }
+}
+
+/** `{ from, to, lang }` from a morph frame, or null if any part is not a non-empty string. */
+export function parseMorph(frame) {
+  const { from, to, lang } = frame ?? {};
+  const ok = [from, to, lang].every((value) => typeof value === 'string' && value !== '');
+  return ok ? { from, to, lang } : null;
 }
 
 /**

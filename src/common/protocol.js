@@ -16,9 +16,13 @@
 //
 // Background -> content script:
 //   { type: BEGIN,  id, term, slots: [{ dict, name }] }
-//   { type: HIT,    id, i, dict, name, outcome, results, error }
+//   { type: HIT,    id, i, dict, name, outcome, results, error, morph }
 //   { type: END,    id, term, matched, fromCache }
 //   { type: FAILED, id, reason, status?, message }
+//
+// `morph` is null, or `{ from, to, lang }` when the server found nothing for the
+// typed word in that dictionary and answered for its lemma instead. Such a HIT
+// follows the slot's first (empty) HIT and replaces it.
 //
 // Only one lookup is in flight per port: a new LOOKUP aborts the previous one, which
 // the server honours by stopping work.
@@ -28,8 +32,9 @@
 // the persisted /api/dicts registry, so the content script never needs it.
 //
 // CANDIDATES AND COMMITMENT. `candidates` is the fallback chain (exact spelling,
-// then apostrophe/possessive/hyphen variants, then naive suffix stripping) because
-// wudict does not lemmatise. The background walks it in order and *commits* to the
+// then apostrophe/possessive/hyphen variants, then naive suffix stripping) for what
+// the server's lemmatisation does not cover: punctuation variants, and languages
+// without lemma data. The background walks it in order and *commits* to the
 // first candidate that produces an actual result: nothing is posted until then, so
 // a fallback never paints a popup that is immediately replaced. Once committed,
 // remaining hits stream live. If no candidate produces results, the only message is
@@ -69,7 +74,10 @@ export const HIT = 'hit';
 export const END = 'end';
 export const FAILED = 'failed';
 
-/** The four mutually exclusive outcomes of a `hit`, which terminates its slot. */
+/**
+ * The four mutually exclusive outcomes of a `hit`. A RESULTS hit terminates its
+ * slot; any other may still be replaced by a lemma hit until the stream ends.
+ */
 export const OUTCOME = {
   RESULTS: 'results',
   EMPTY: 'empty',

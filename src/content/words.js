@@ -118,10 +118,11 @@ function expandAbbreviation(chars, start, end) {
 /**
  * The fallback chain, in the order it should be tried.
  *
- * wudict has no morphology: `q=running` hits only if some dictionary stores
- * *running* as a headword. Large dictionaries usually do, but coverage varies, so
- * the client owns its own chain. Each entry costs one request, but only for a word
- * that would otherwise show nothing — and misses are cached.
+ * The server retries a single word that finds nothing in a dictionary with its
+ * lemma (`running` -> *run*), but only where it has lemma data for the dictionary's
+ * language, and never for punctuation variants (`don’t`, `dog's`, hyphenation).
+ * This chain covers those. Each entry costs one request, but only for a word that
+ * would otherwise show nothing — and misses are cached.
  */
 export function candidates(term, limit = 4) {
   const out = [];

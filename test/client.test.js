@@ -4,7 +4,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { before, describe, it } from 'node:test';
+import { afterEach, before, describe, it } from 'node:test';
 
 import {
   buildSearchUrl,
@@ -12,6 +12,7 @@ import {
   droppedIds,
   fetchDicts,
   InvalidQueryError,
+  parseMorph,
   search,
 } from '../src/background/client.js';
 import { OUTCOME } from '../src/common/protocol.js';
@@ -87,6 +88,114 @@ describe('droppedIds', () => {
   });
 });
 
+describe('parseMorph', () => {
+  it('accepts a complete frame', () => {
+    assert.deepEqual(parseMorph({ t: 'morph', i: 0, from: 'mice', to: 'mouse', lang: 'en' }), {
+      from: 'mice',
+      to: 'mouse',
+      lang: 'en',
+    });
+  });
+
+  for (const frame of [
+    {},
+    { from: 'mice', to: 'mouse' },
+    { from: '', to: 'x', lang: 'en' },
+    { from: 1, to: 'x', lang: 'en' },
+    null,
+  ]) {
+    it(`refuses ${JSON.stringify(frame)}`, () => assert.equal(parseMorph(frame), null));
+  }
+});
+
+describe('search with a lemma wave', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  const serve = (frames) => {
+    globalThis.fetch = async () =>
+      new Response(frames.map((frame) => JSON.stringify(frame)).join('\n') + '\n', {
+        headers: { 'content-type': 'application/x-ndjson' },
+      });
+  };
+  const collect = async () => {
+    const out = [];
+    for await (const frame of search('http://wudict.test', {
+      ...QUERY,
+      q: 'mice',
+      dicts: ['a', 'b'],
+    })) {
+      out.push(frame);
+    }
+    return out;
+  };
+  const begin = {
+    t: 'begin',
+    i: 0,
+    slots: [
+      { dict: 'a', name: 'a' },
+      { dict: 'b', name: 'b' },
+    ],
+  };
+  const morph = { t: 'morph', i: 0, from: 'mice', to: 'mouse', lang: 'en' };
+  const lemmaHit = {
+    t: 'hit',
+    i: 0,
+    dict: 'a',
+    name: 'A',
+    results: [{ Headword: 'mouse', Body: 'x' }],
+  };
+
+  it('yields the lemma hit for a slot that missed, tagged with the morph', async () => {
+    serve([
+      begin,
+      { t: 'hit', i: 1, dict: 'b', name: 'B' },
+      { t: 'hit', i: 0, dict: 'a', name: 'A' },
+      morph,
+      lemmaHit,
+      { t: 'end', i: 0 },
+    ]);
+    const hits = (await collect()).filter((frame) => frame.t === 'hit');
+    assert.deepEqual(
+      hits.map((hit) => [hit.i, hit.outcome, hit.morph?.to ?? null]),
+      [
+        [1, OUTCOME.EMPTY, null],
+        [0, OUTCOME.EMPTY, null],
+        [0, OUTCOME.RESULTS, 'mouse'],
+      ],
+    );
+  });
+
+  it('still refuses a second hit for a slot without a morph frame', async () => {
+    serve([begin, { t: 'hit', i: 0, dict: 'a', name: 'A' }, lemmaHit, { t: 'end', i: 0 }]);
+    await assert.rejects(collect, /slot 0 produced two hits/);
+  });
+
+  it('refuses a third hit for the same slot', async () => {
+    serve([
+      begin,
+      { t: 'hit', i: 0, dict: 'a', name: 'A' },
+      morph,
+      lemmaHit,
+      lemmaHit,
+      { t: 'end', i: 0 },
+    ]);
+    await assert.rejects(collect, /slot 0 produced two hits/);
+  });
+
+  it('refuses a malformed morph frame', async () => {
+    serve([
+      begin,
+      { t: 'hit', i: 0, dict: 'a', name: 'A' },
+      { t: 'morph', i: 0, from: 'mice' },
+      { t: 'end', i: 0 },
+    ]);
+    await assert.rejects(collect, /malformed morph frame/);
+  });
+});
+
 describe('live client', () => {
   let reachable = false;
   let exactIds = [];
@@ -139,6 +248,27 @@ describe('live client', () => {
     }
     // Nothing is yielded after the stream ends.
     assert.ok(!frames.some((frame) => frame.t === 'end'));
+  });
+
+  it('answers an inflected form with its lemma', async (t) => {
+    if (!reachable) return t.skip(`no wudict at ${BASE_URL}`);
+    const lemmaHits = [];
+    for await (const frame of search(BASE_URL, {
+      ...QUERY,
+      q: 'mice',
+      dicts: exactIds.slice(0, 8),
+    })) {
+      if (frame.t === 'hit' && frame.morph) lemmaHits.push(frame);
+    }
+    // Some dictionaries list "mice" themselves, in which case no lemma wave runs.
+    if (lemmaHits.length === 0) return t.skip('no dictionary needed the lemma for "mice"');
+    for (const hit of lemmaHits) {
+      assert.equal(hit.outcome, OUTCOME.RESULTS);
+      // One wave per language: "mice" is also Romanian (-> mică).
+      assert.equal(hit.morph.from, 'mice');
+      assert.notEqual(hit.morph.to, 'mice');
+      assert.equal(typeof hit.morph.lang, 'string');
+    }
   });
 
   it('returns clean bodies with absolute /res/ URLs', async (t) => {

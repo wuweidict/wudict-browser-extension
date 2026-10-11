@@ -298,7 +298,10 @@ async function attemptCandidate({
 async function streamCandidate({ post, id, baseUrl, dicts, query, slotsFor, signal, append }) {
   let committed = false;
   let slots = null;
-  const buffered = [];
+  let buffered = [];
+  // A miss is provisional until `end`: the server's lemma wave may still answer
+  // that slot. Caching it early would turn an aborted stream into a cached miss.
+  const misses = new Map();
 
   for await (const frame of search(baseUrl, { ...query, dicts }, { signal })) {
     if (frame.t === 'begin') {
@@ -318,12 +321,19 @@ async function streamCandidate({ post, id, baseUrl, dicts, query, slotsFor, sign
       outcome: frame.outcome,
       results: frame.results,
       error: frame.error,
+      morph: frame.morph,
     };
-    // Misses are cached too: without that, a word whose chain ends in nothing
-    // re-probes the server on every crossing.
-    cache.set(cacheKey(frame.dict, query), entry);
+    const key = cacheKey(frame.dict, query);
+    if (frame.outcome === OUTCOME.RESULTS) {
+      misses.delete(key);
+      cache.set(key, entry);
+    } else {
+      misses.set(key, entry);
+    }
 
     const payload = { type: HIT, id, i: frame.i, dict: frame.dict, ...entry };
+    // A lemma hit replaces its slot's miss; never paint the miss first.
+    if (frame.morph) buffered = buffered.filter((held) => held.i !== frame.i);
 
     if (!committed && frame.outcome === OUTCOME.RESULTS) {
       committed = true;
@@ -338,12 +348,16 @@ async function streamCandidate({ post, id, baseUrl, dicts, query, slotsFor, sign
         fromCache: false,
       });
       for (const held of buffered) post(held);
-      buffered.length = 0;
+      buffered = [];
     }
 
     if (committed) post(payload);
     else buffered.push(payload);
   }
+
+  // Misses are cached too: without that, a word whose chain ends in nothing
+  // re-probes the server on every crossing.
+  for (const [key, entry] of misses) cache.set(key, entry);
 
   return committed ? { fromCache: false } : false;
 }
@@ -449,9 +463,7 @@ async function paintTab(tabId, host) {
     api.action.setTitle({ tabId, title: view.title }).catch(() => {}),
     api.action.setBadgeText({ tabId, text: view.badge }).catch(() => {}),
     view.badge
-      ? api.action
-          .setBadgeBackgroundColor({ tabId, color: view.badgeColour })
-          .catch(() => {})
+      ? api.action.setBadgeBackgroundColor({ tabId, color: view.badgeColour }).catch(() => {})
       : Promise.resolve(),
   ]);
 }
@@ -1025,9 +1037,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === AUDIO_STOP) {
-    stopAudio().then(sendResponse, (error) =>
-      sendResponse({ ok: false, message: error.message }),
-    );
+    stopAudio().then(sendResponse, (error) => sendResponse({ ok: false, message: error.message }));
     return true;
   }
 

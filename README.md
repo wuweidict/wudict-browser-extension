@@ -96,7 +96,7 @@ Lookups are cached in the service worker — crossing the same word again is ins
 
 ### Inflected words
 
-wudict does **no morphology**: `running` is found only if a dictionary stores it. The extension compensates with a fallback chain — apostrophe, possessive, hyphen, suffix variants (4 attempts by default), each one request, only for words that would otherwise return nothing.
+When a single word finds nothing in a dictionary, the wudict server searches that dictionary again for the word's lemma, using its lemma data for the dictionary's language (English is built in; other languages are installed in wudict): `running` finds *run*. For what lemmatisation does not cover, the extension adds a fallback chain — apostrophe, possessive, hyphen and suffix variants (4 attempts by default), each one request, only for words that would otherwise return nothing.
 
 ---
 
@@ -128,7 +128,7 @@ wudict does **no morphology**: `running` is found only if a dictionary stores it
 | Right-click item missing | Turn it back on in **Options → Searching**; it never appears without a text selection |
 | "is not answering extensions" | wudict is running but is too old to allow extension origins, or its `BROWSER_EXTENSIONS` list omits this extension → update wudict, or widen that list. There is no client-side workaround: the CORS grant is the only supported transport |
 | A page asks about "other apps and services on this device" | Not this extension: it puts no local address in the page. Something else on that tab is probing your local network |
-| Word shows nothing | Dictionary lacks the word (no morphology) → open the word in wudict to check |
+| Word shows nothing | The dictionaries lack the word and its lemma, wudict has no lemma data for that language, or it cannot tell the dictionary's language → open the word in wudict to check |
 | Popup closes immediately | Pointer left it; or you scrolled the page (by design — reposition and it reopens) |
 | "does not support this search mode" | A dictionary that can't answer `exact` — expected, others still render |
 

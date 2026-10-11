@@ -113,12 +113,13 @@ Captured from a running server, verbatim:
 emits it unconditionally, so `begin` and `end` both carry a meaningless `"i":0`.
 Do not use the presence of `i` to decide anything — switch on `t` first.
 
-`t` is one of exactly three values:
+`t` is one of exactly four values:
 
 | `t` | fields | meaning |
 |---|---|---|
 | `begin` | `slots[]` | the layout, in the order you asked for. Always first, exactly once. |
-| `hit` | `i`, `dict`, `name`, and then `results[]` **or** `skipped` **or** `error` | one dictionary has finished. Exactly one per slot. |
+| `hit` | `i`, `dict`, `name`, and then `results[]` **or** `skipped` **or** `error` | one dictionary has finished. One per slot, plus at most one lemma hit (below). |
+| `morph` | `from`, `to`, `lang` | every `hit` after it answers `to`, the lemma of `from`, not the typed word. Zero or more per stream — one per language with lemma data. |
 | `end` | — | the stream is complete. Always last, exactly once. |
 
 `i` indexes into `begin.slots`. **Hits arrive in completion order, not request
@@ -128,8 +129,10 @@ waiting for the slowest dictionary.
 
 ### A `hit` is not always a result
 
-Every slot produces exactly one `hit`, which is the slot's terminator whatever
-it carries. Three mutually exclusive outcomes:
+Every slot produces one `hit` in the first wave. A `results[]` hit is final; any
+other may be followed, after a `morph` frame, by a second hit for the same `i`
+that carries the lemma's results and replaces it (lemma hits are never empty —
+a second miss is not sent). So a miss is final only at `end`. Three mutually exclusive outcomes:
 
 - **`results[]`** — found. Uses Go field names, capitalised: `Headword`, `Body`.
 - **`"skipped":true`, no `results`** — this dictionary cannot answer this
@@ -139,7 +142,7 @@ it carries. Three mutually exclusive outcomes:
   unaffected and the stream continues.
 
 A `hit` with none of the three is a dictionary that answered with no matches.
-Treat all four as "slot `i` is done".
+Treat all four as "slot `i` has answered"; only `results[]` closes it for good.
 
 `slots[].name` is **the id again, not the dictionary's name.** The real name
 arrives on the `hit`, because naming a dictionary means opening it and `begin`
@@ -172,14 +175,20 @@ is already on screen.
 
 ### Matching semantics — read this before designing hover
 
-- `exact` falls back to case- and accent-folded equality. It does **not**
-  lemmatise. wudict has no morphology: `q=running` finds an entry only if some
-  dictionary stores *running* as a headword.
+- `exact` falls back to case- and accent-folded equality. For a single word
+  that then finds nothing in a dictionary, the server searches that dictionary
+  again for the word's lemma, with the lemma data for the dictionary's language
+  (English built in, other languages installed by the user; `MORPH_CACHE = 0`
+  turns it off): `q=running` also finds *run*. The second answer arrives as
+  another `hit` frame for the same slot `i`, after a
+  `{"t":"morph","from":…,"to":…,"lang":…}` frame.
 - In practice large dictionaries do store inflected forms (verified on OED:
   `running`, `sped`, `better`, `mice` all hit directly), so hover works better
-  than the previous paragraph suggests — but coverage is the **dictionary's**,
-  not wudict's, and it varies. A client wanting reliable inflected lookup needs
-  its own fallback chain (exact → naive suffix stripping → `prefix`).
+  than the previous paragraph suggests — but coverage depends on the
+  dictionary and on the installed lemma data. A client wanting reliable lookup
+  keeps its own fallback chain for what lemmatisation does not cover:
+  punctuation variants, and languages without lemma data (exact → naive suffix
+  stripping → `prefix`).
 - `prefix` returns everything starting with `q`, so for hover it is a poor
   default: hovering *run* yields *runny*, *runway*, *runt*. Use `exact` for
   hover and offer `prefix` as a deliberate widening.
