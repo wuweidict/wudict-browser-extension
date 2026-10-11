@@ -151,7 +151,9 @@ function onMessage(message) {
 
     case END:
       if (!message.matched) {
-        popup.hide();
+        // "More" finding nothing must not take down what is already on screen.
+        if (state.moreBusy) endMore('No more results');
+        else popup.hide();
         break;
       }
       popup.prune();
@@ -161,7 +163,9 @@ function onMessage(message) {
       break;
 
     case FAILED:
-      state.moreBusy = false;
+      if (state.moreBusy) {
+        endMore(message.reason === 'no-dictionaries' ? 'No more dictionaries' : null);
+      }
       // A lookup that never started is not worth a popup on every hover; the
       // background console carries the detail.
       console.debug('[wudict]', message.reason, message.message);
@@ -199,6 +203,8 @@ function lookupTerm(term) {
   state.lookupId += 1;
   state.activeId = state.lookupId;
   state.shownDicts = [];
+  // A new word supersedes any "More" still in flight for the last one.
+  state.moreBusy = false;
 
   send({
     type: LOOKUP,
@@ -237,6 +243,14 @@ function requestMore() {
 function popupTerm() {
   // The candidate that actually matched, not the raw hovered text.
   return state.matchedTerm ?? state.lastWord?.term ?? '';
+}
+
+/** Settle a "More" request; a label disables the button for this word. */
+function endMore(finalLabel) {
+  state.moreBusy = false;
+  if (!popup.isVisible()) return;
+  if (finalLabel) popup.showMore(finalLabel, false);
+  else updateMore();
 }
 
 function updateMore() {
@@ -415,9 +429,7 @@ async function start() {
   // the tabHosts note in background/main.js. Top frame only; a subframe's host is
   // not the tab's identity.
   if (window.top === window) {
-    api.runtime
-      .sendMessage({ type: 'wudict:hello', url: location.href })
-      .catch(() => {});
+    api.runtime.sendMessage({ type: 'wudict:hello', url: location.href }).catch(() => {});
     // Restored from the back/forward cache: the worker may have forgotten the tab,
     // or been replaced entirely, while this page sat frozen.
     window.addEventListener('pageshow', (event) => {

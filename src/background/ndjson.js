@@ -28,6 +28,19 @@ export class WudictHttpError extends Error {
 }
 
 /**
+ * The server answered, but not in the shape the contract describes: a line that is
+ * not JSON, a body that ends before `end`. Distinct from a fetch failure, which
+ * says nothing answered at all — conflating the two reports a running server as
+ * unreachable.
+ */
+export class ProtocolError extends Error {
+  constructor(message, options) {
+    super(message, options);
+    this.name = 'ProtocolError';
+  }
+}
+
+/**
  * Throw if the response is a pre-stream failure, reading the plain-JSON error body.
  * Must be called before handing the response to `readFrames`.
  */
@@ -48,7 +61,7 @@ export async function assertStreamStarted(response) {
  * render before the slowest one has opened.
  */
 export async function* readFrames(response) {
-  if (!response.body) throw new Error('response has no body to stream');
+  if (!response.body) throw new ProtocolError('response has no body to stream');
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -85,7 +98,7 @@ function parseLine(line) {
   try {
     return JSON.parse(trimmed);
   } catch (cause) {
-    throw new Error(`malformed NDJSON line: ${truncate(trimmed)}`, { cause });
+    throw new ProtocolError(`malformed NDJSON line: ${truncate(trimmed)}`, { cause });
   }
 }
 

@@ -7,7 +7,9 @@
 // frame vocabulary.
 
 import { OUTCOME } from '../common/protocol.js';
-import { assertStreamStarted, readFrames } from './ndjson.js';
+import { assertStreamStarted, ProtocolError, readFrames } from './ndjson.js';
+
+const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
 
 /** Thrown for a request that must not be sent, before any network activity. */
 export class InvalidQueryError extends Error {
@@ -18,21 +20,29 @@ export class InvalidQueryError extends Error {
 }
 
 /**
- * Fetch the dictionary list. Called once at startup and on explicit refresh —
- * never polled.
+ * Fetch the dictionary list. Called at startup and on explicit refresh — never
+ * polled.
  *
- * `begin.total` is an upper bound, not a row count: a dictionary that cannot be
- * described is omitted. So the terminator is `end`, never a count.
+ * With the `etag` of an earlier answer the request is conditional, and an
+ * unchanged list is a bodiless 304 the server decides without opening a single
+ * dictionary: resolves `{ notModified: true }`. Otherwise resolves
+ * `{ total, dicts, etag }`, where `etag` is null when the server says this answer
+ * must not be kept. It rides on `end`, not in a header, because whether an answer
+ * may be kept is known only after its last row.
+ *
+ * `If-None-Match` is not CORS-safelisted, so a conditional request is preflighted.
+ * Only a server that emits `etag` is ever sent one, and that server allows it.
  */
-export async function fetchDicts(baseUrl, { signal } = {}) {
-  const response = await fetch(`${baseUrl}/api/dicts`, {
-    signal,
-    headers: { accept: 'application/x-ndjson' },
-  });
+export async function fetchDicts(baseUrl, { signal, etag = null } = {}) {
+  const headers = { accept: 'application/x-ndjson' };
+  if (etag) headers['if-none-match'] = etag;
+
+  const response = await fetch(`${baseUrl}/api/dicts`, { signal, headers });
+  if (response.status === 304) return { notModified: true };
   await assertStreamStarted(response);
 
   let total = null;
-  let sawEnd = false;
+  let end = null;
   const dicts = [];
 
   for await (const frame of readFrames(response)) {
@@ -42,36 +52,47 @@ export async function fetchDicts(baseUrl, { signal } = {}) {
         break;
       case 'dict':
         if (frame.dict?.id) {
-          // Deliberately narrow: paths and sizes belong to the desktop panel.
-          const { id, name, format, entries, caps } = frame.dict;
-          dicts.push({ id, name, format, entries, caps });
+          // Deliberately narrow: paths and sizes belong to the desktop panel. A row
+          // that could not be opened is still sent, with `error`.
+          const { id, name, format, entries, caps, error } = frame.dict;
+          dicts.push({ id, name, format, entries, caps, error: error || null });
         }
         break;
       case 'end':
-        sawEnd = true;
+        end = frame;
         break;
       default:
+        // `busy` progress frames, and whatever a later server adds.
         break;
     }
   }
 
-  if (!sawEnd) throw new Error('/api/dicts ended without an `end` frame');
-  return { total, dicts };
+  if (end === null) throw new ProtocolError('/api/dicts ended without an `end` frame');
+  // Rows arrive in completion order, which differs on every request. Unsorted, the
+  // default selection ("the first N that can answer") would change from one refresh
+  // to the next for no reason the user could see.
+  dicts.sort((a, b) => collator.compare(a.name ?? '', b.name ?? '') || (a.id < b.id ? -1 : 1));
+  return { total, dicts, etag: typeof end.etag === 'string' && end.etag ? end.etag : null };
 }
 
 /**
  * Stream a search.
  *
  * Yields `{ t: 'begin', slots }` first, then one `{ t: 'hit', ... }` per slot in
- * completion order, and nothing after the stream ends. Hits arrive out of request
- * order by design — render into slots by `i`.
+ * completion order, then `{ t: 'end' }` — only if the server sent it, so a consumer
+ * can tell a complete answer from a truncated one. Hits arrive out of request order
+ * by design — render into slots by `i`.
  *
- * A slot can then receive ONE more hit: when a single word finds nothing in some
- * dictionaries, the server searches those again for the word's lemma and announces
- * it with a `{t:'morph', from, to, lang}` frame. Every hit after that frame is for
- * `to`, not the typed word, and replaces the slot's miss; it carries `morph` so the
- * reader can be told. A first-wave hit carries `morph: null`. So a non-results hit
- * is final only once the stream has ended.
+ * A slot that missed can then receive ONE more hit: when a single word finds
+ * nothing in a dictionary, the server searches it again for the word's lemma and
+ * announces that with a `{t:'morph', from, to, lang}` frame. Every hit after that
+ * frame answers `to`, not the typed word, and replaces the slot's miss; it carries
+ * `morph` so the reader can be told. A first-wave hit carries `morph: null`. So a
+ * miss is final only at `end`; every other outcome is final at once.
+ *
+ * Frames the contract does not allow — a hit outside the slot range, a second hit
+ * for a slot that did not miss, a third hit — are dropped rather than thrown on: one
+ * malformed frame must not cost the dictionaries that answered correctly.
  */
 export async function* search(baseUrl, query, { signal } = {}) {
   const url = buildSearchUrl(baseUrl, query);
@@ -80,39 +101,41 @@ export async function* search(baseUrl, query, { signal } = {}) {
   await assertStreamStarted(response);
 
   let slots = null;
-  const seen = new Set();
-  // Slots already re-answered by a lemma wave, and the wave currently streaming.
-  const relemmatised = new Set();
+  // Slot index -> 'first' (answered, still a miss), 'final'.
+  const state = new Map();
   let morph = null;
 
   for await (const frame of readFrames(response)) {
     switch (frame.t) {
       case 'begin':
         // `i` is emitted on every frame and is meaningless here — switch on `t`.
-        slots = (frame.slots ?? []).map((slot) => ({ dict: slot.dict }));
+        if (slots !== null) break;
+        slots = (Array.isArray(frame.slots) ? frame.slots : []).map((slot) => ({
+          dict: slot?.dict,
+        }));
         yield { t: 'begin', slots };
         break;
 
       case 'hit': {
-        if (slots === null) throw new Error('received a hit before begin');
-        if (seen.has(frame.i)) {
-          // A second hit is legal only once per slot, and only for a lemma.
-          if (morph === null || relemmatised.has(frame.i)) {
-            throw new Error(`slot ${frame.i} produced two hits`);
-          }
-          relemmatised.add(frame.i);
-        }
-        seen.add(frame.i);
+        if (slots === null) throw new ProtocolError('received a hit before begin');
+        const { i } = frame;
+        if (!Number.isInteger(i) || i < 0 || i >= slots.length) break;
+        const seen = state.get(i);
+        if (seen === 'final' || (seen === 'first' && morph === null)) break;
+
+        const outcome = classifyHit(frame);
+        state.set(i, morph === null && outcome === OUTCOME.EMPTY ? 'first' : 'final');
         yield {
           t: 'hit',
-          i: frame.i,
-          dict: frame.dict,
+          i,
+          // The slot is the authority on which dictionary this is.
+          dict: slots[i].dict,
           // The real name arrives here, not on `begin`.
-          name: frame.name,
-          outcome: classifyHit(frame),
-          results: frame.results ?? [],
-          error: frame.error ?? null,
-          morph,
+          name: typeof frame.name === 'string' ? frame.name : '',
+          outcome,
+          results: Array.isArray(frame.results) ? frame.results : [],
+          error: frame.error || null,
+          morph: seen === 'first' ? morph : null,
         };
         break;
       }
@@ -120,38 +143,40 @@ export async function* search(baseUrl, query, { signal } = {}) {
       case 'morph':
         // `i` is meaningless here too. Hits after this frame belong to `to`.
         morph = parseMorph(frame);
-        if (morph === null) throw new Error('malformed morph frame');
         break;
 
       case 'end':
+        yield { t: 'end' };
         return;
 
       default:
-        // The contract fixes `t` at begin|hit|morph|end. A future addition should not
-        // break a lookup, so it is ignored rather than thrown on.
+        // `t` gains values over time; an unknown one must not break a lookup.
         break;
     }
   }
 }
 
-/** `{ from, to, lang }` from a morph frame, or null if any part is not a non-empty string. */
+/**
+ * `{ from, to, lang }` from a morph frame. A missing or blank field is null rather
+ * than a reason to reject the frame: whatever it says, the hits after it are for a
+ * different word than the one typed.
+ */
 export function parseMorph(frame) {
-  const { from, to, lang } = frame ?? {};
-  const ok = [from, to, lang].every((value) => typeof value === 'string' && value !== '');
-  return ok ? { from, to, lang } : null;
+  const field = (value) => (typeof value === 'string' && value !== '' ? value : null);
+  return { from: field(frame?.from), to: field(frame?.to), lang: field(frame?.lang) };
 }
 
 /**
- * Which of the four outcomes a `hit` carries.
+ * Which outcome a `hit` carries.
  *
- * `skipped` and `error` arrive as explicit JSON null on a normal hit rather than
- * being absent, so these must be truthiness checks — `'skipped' in frame` is true
- * even when the dictionary was not skipped.
+ * Truthiness checks throughout: an absent field and an explicit null must read the
+ * same, and `'skipped' in frame` would not.
  */
 export function classifyHit(frame) {
   if (frame.error) return OUTCOME.ERROR;
   if (frame.skipped) return OUTCOME.SKIPPED;
-  if (frame.results && frame.results.length > 0) return OUTCOME.RESULTS;
+  if (frame.deferred) return OUTCOME.DEFERRED;
+  if (Array.isArray(frame.results) && frame.results.length > 0) return OUTCOME.RESULTS;
   return OUTCOME.EMPTY;
 }
 

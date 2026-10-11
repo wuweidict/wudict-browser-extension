@@ -21,12 +21,13 @@ const STORAGE_KEY = 'dictRegistry';
 const CAP_FOR_MODE = {
   exact: 'Exact',
   prefix: 'Prefix',
-  contains: 'Contains',
   fts: 'FTS',
+  wildcard: 'Wildcard',
 };
 
-export function buildRegistry({ baseUrl, total, dicts }) {
-  return { baseUrl, total, dicts, fetchedAt: Date.now() };
+/** `etag` is the server's validator for this exact list, or null if not keepable. */
+export function buildRegistry({ baseUrl, total, dicts, etag = null }) {
+  return { baseUrl, total, dicts, etag, fetchedAt: Date.now() };
 }
 
 export async function loadRegistry() {
@@ -85,15 +86,18 @@ export function resolveByName(staleRegistry, freshRegistry, staleIds) {
  * Which dictionaries a lookup should query by default.
  *
  * Only dictionaries that can answer the mode are worth naming — asking anyway is
- * not an error, but it spends a slot on a guaranteed `skipped`. Small by default:
- * `n` is per dictionary, and the server opens at most 8 concurrently.
+ * not an error, but it spends a slot on a guaranteed `skipped`, and one the server
+ * could not open spends it on a guaranteed `error`. Small by default: `n` is per
+ * dictionary, and the server opens at most 8 concurrently.
  */
 export function defaultSelection(registry, { mode = 'exact', limit = 3 } = {}) {
   const cap = CAP_FOR_MODE[mode];
-  const capable = (registry?.dicts ?? []).filter((dict) =>
-    cap ? dict.caps?.[cap] === true : true,
-  );
-  return capable.slice(0, limit).map((dict) => dict.id);
+  const out = [];
+  for (const dict of registry?.dicts ?? []) {
+    if (out.length >= limit) break;
+    if (!dict.error && (!cap || dict.caps?.[cap] === true)) out.push(dict.id);
+  }
+  return out;
 }
 
 export { CAP_FOR_MODE };

@@ -127,6 +127,7 @@ describe('readFrames', () => {
 describe('live server', () => {
   let reachable = false;
   const dictIds = [];
+  const dictCaps = new Map();
 
   before(async () => {
     try {
@@ -134,7 +135,10 @@ describe('live server', () => {
       reachable = response.ok;
       if (reachable) {
         for await (const frame of readFrames(response)) {
-          if (frame.t === 'dict') dictIds.push(frame.dict.id);
+          if (frame.t === 'dict') {
+            dictIds.push(frame.dict.id);
+            dictCaps.set(frame.dict.id, frame.dict.caps ?? {});
+          }
         }
       }
     } catch {
@@ -142,7 +146,7 @@ describe('live server', () => {
     }
   });
 
-  it('/api/dicts streams begin/dict/end and nothing else', async (t) => {
+  it('/api/dicts streams begin, dict rows, optional busy frames, then end', async (t) => {
     if (!reachable) return t.skip(`no wudict at ${BASE_URL}`);
     const response = await fetch(`${BASE_URL}/api/dicts`);
     assert.match(response.headers.get('content-type'), /application\/x-ndjson/);
@@ -159,6 +163,10 @@ describe('live server', () => {
           dicts += 1;
           assert.ok(frame.dict.id && frame.dict.name);
           break;
+        case 'busy':
+          // Progress for rows pending 10 s or more; the closing one is empty.
+          assert.ok(frame.busy === undefined || Array.isArray(frame.busy));
+          break;
         case 'end':
           sawEnd = true;
           break;
@@ -167,9 +175,9 @@ describe('live server', () => {
       }
     }
     assert.ok(sawEnd, 'stream must terminate with an `end` frame');
-    // `total` is documented as an upper bound: dictionaries that cannot be
-    // described are omitted.
-    assert.ok(dicts <= total, `${dicts} dict frames exceeded begin.total ${total}`);
+    // Every dictionary gets a row, one that cannot be opened included (it
+    // carries `error`), so `total` is exact.
+    assert.equal(dicts, total, `${dicts} dict frames, begin.total ${total}`);
   });
 
   it('rejects a missing q before the stream starts', async (t) => {
@@ -216,6 +224,7 @@ describe('live server', () => {
           slots = frame.slots;
           break;
         case 'hit':
+          // `speed` is its own lemma, so no second (lemma) wave can follow.
           assert.ok(!hits.has(frame.i), `slot ${frame.i} produced two hits`);
           hits.set(frame.i, frame);
           break;
@@ -243,11 +252,12 @@ describe('live server', () => {
       assert.equal(hit.dict, slots[i].dict, 'hit.dict must match its slot');
       // The real name arrives on the hit.
       assert.ok(hit.name);
-      // Exactly one of the four outcomes. `skipped`/`error` arrive as explicit
-      // null on a normal hit, so these must be truthiness checks.
+      // At most one of the outcomes; a hit with none is a plain miss. Truthiness
+      // checks, so an absent field and an explicit null read the same.
       const outcomes = [
         hit.results && hit.results.length > 0,
         Boolean(hit.skipped),
+        Boolean(hit.deferred),
         Boolean(hit.error),
       ].filter(Boolean);
       assert.ok(outcomes.length <= 1, `slot ${i} reported conflicting outcomes`);
@@ -262,9 +272,11 @@ describe('live server', () => {
 
   it('skips dictionaries that cannot answer the requested mode', async (t) => {
     if (!reachable) return t.skip(`no wudict at ${BASE_URL}`);
-    const requested = dictIds.slice(0, 3);
+    // `FTS` is false until the user builds a dictionary's full-text index.
+    const requested = dictIds.filter((id) => dictCaps.get(id)?.FTS === false).slice(0, 3);
+    if (requested.length === 0) return t.skip('every dictionary has a full-text index');
     const url =
-      `${BASE_URL}/api/search?q=speed&mode=contains&n=1` +
+      `${BASE_URL}/api/search?q=speed&mode=fts&n=1` +
       `&dict=${encodeURIComponent(requested.join(','))}`;
     const response = await fetch(url);
     await assertStreamStarted(response);
@@ -273,8 +285,21 @@ describe('live server', () => {
     for await (const frame of readFrames(response)) {
       if (frame.t === 'hit' && frame.skipped) skipped += 1;
     }
-    // Not an error: `contains` is not in every dictionary's caps.
-    assert.ok(skipped >= 1, 'expected at least one skipped dictionary for mode=contains');
+    // Not an error: these dictionaries do not have `FTS` in their caps.
+    assert.ok(skipped >= 1, 'expected at least one skipped dictionary for mode=fts');
+  });
+
+  it('rejects the retired contains mode before the stream starts', async (t) => {
+    if (!reachable) return t.skip(`no wudict at ${BASE_URL}`);
+    // `*word*` in wildcard mode is the substring search now.
+    const response = await fetch(`${BASE_URL}/api/search?q=speed&mode=contains`);
+    await assert.rejects(
+      () => assertStreamStarted(response),
+      (error) => {
+        assert.equal(error.status, 400);
+        return true;
+      },
+    );
   });
 
   it('silently drops unknown ids, and 404s only when none resolve', async (t) => {

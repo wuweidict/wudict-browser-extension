@@ -21,6 +21,7 @@
 import { api } from '../common/api.js';
 import {
   buildRegistry,
+  CAP_FOR_MODE,
   defaultSelection,
   isForBaseUrl,
   labelFor,
@@ -52,14 +53,29 @@ import { cacheKey, createCache } from './cache.js';
 import { droppedIds, fetchDicts, InvalidQueryError, search } from './client.js';
 import { createInflight } from './inflight.js';
 import { createMediaProxy } from './media.js';
-import { WudictHttpError } from './ndjson.js';
+import { ProtocolError, WudictHttpError } from './ndjson.js';
 
 const cache = createCache();
 const media = createMediaProxy();
 const searchInflight = createInflight();
 
 let registry = null;
+// { baseUrl, promise } — one /api/dicts request per address at a time.
 let registryFetch = null;
+
+// ------------------------------------------------------------------- settings
+
+// Read on every lookup and once per tab on every repaint, so it is memoised and
+// dropped on any change rather than read from storage each time.
+let settingsMemo = null;
+
+function currentSettings() {
+  settingsMemo ??= getSettings().catch((error) => {
+    settingsMemo = null;
+    throw error;
+  });
+  return settingsMemo;
+}
 
 // ------------------------------------------------------------------- health
 
@@ -106,20 +122,37 @@ async function ensureRegistry(baseUrl) {
   return refreshRegistry(baseUrl);
 }
 
-/** Refresh from the server. Concurrent callers share one in-flight request. */
+/**
+ * Refresh from the server. Concurrent callers for one address share one request.
+ *
+ * Conditional when the list we hold came with an `etag`: an unchanged list is a
+ * bodiless 304 the server answers without opening any dictionary, so a refresh —
+ * every "Test connection", every panel probe — costs next to nothing.
+ */
 async function refreshRegistry(baseUrl) {
-  if (registryFetch) return registryFetch;
-  registryFetch = (async () => {
-    const { total, dicts } = await fetchDicts(baseUrl);
-    const next = buildRegistry({ baseUrl, total, dicts });
+  if (registryFetch?.baseUrl === baseUrl) return registryFetch.promise;
+
+  const promise = (async () => {
+    const held = isForBaseUrl(registry, baseUrl) ? registry : await loadRegistry();
+    const kept = isForBaseUrl(held, baseUrl) ? held : null;
+    const answer = await fetchDicts(baseUrl, { etag: kept?.etag ?? null });
+    if (answer.notModified && !kept) throw new ProtocolError('304 to an unconditional request');
+
+    const next = answer.notModified
+      ? { ...kept, fetchedAt: Date.now() }
+      : buildRegistry({ baseUrl, ...answer });
     await saveRegistry(next);
-    registry = next;
+    // A base-URL change while this was in flight makes it someone else's answer.
+    if ((await currentSettings()).baseUrl === baseUrl) registry = next;
     return next;
   })();
+
+  const entry = { baseUrl, promise };
+  registryFetch = entry;
   try {
-    return await registryFetch;
+    return await promise;
   } finally {
-    registryFetch = null;
+    if (registryFetch === entry) registryFetch = null;
   }
 }
 
@@ -168,11 +201,12 @@ async function runLookup(port, session, message) {
   };
 
   try {
-    const { baseUrl } = await getSettings();
+    const { baseUrl } = await currentSettings();
     const current = await ensureRegistry(baseUrl);
 
     const base = {
-      mode: message.mode ?? LOOKUP_DEFAULTS.mode,
+      // Only a mode the server knows: anything else is a 400 for every hover.
+      mode: Object.hasOwn(CAP_FOR_MODE, message.mode) ? message.mode : LOOKUP_DEFAULTS.mode,
       n: message.n ?? LOOKUP_DEFAULTS.n,
       format: message.format ?? LOOKUP_DEFAULTS.format,
     };
@@ -230,6 +264,10 @@ async function runLookup(port, session, message) {
       // The server answered, so it is up; this query was the problem.
       setHealth(HEALTH.OK);
       post({ type: FAILED, id, reason: 'http', status: error.status, message: error.message });
+    } else if (error instanceof ProtocolError) {
+      // It answered, just not in the contract's shape: up, but not understood.
+      setHealth(HEALTH.OK);
+      post({ type: FAILED, id, reason: 'protocol', message: error.message });
     } else {
       setHealth(HEALTH.DOWN, describeFetchFailure(error));
       post({ type: FAILED, id, reason: 'blocked', message: describeFetchFailure(error) });
@@ -297,10 +335,12 @@ async function attemptCandidate({
 /** The network half of `attemptCandidate`, run by at most one caller at a time. */
 async function streamCandidate({ post, id, baseUrl, dicts, query, slotsFor, signal, append }) {
   let committed = false;
+  let complete = false;
   let slots = null;
   let buffered = [];
   // A miss is provisional until `end`: the server's lemma wave may still answer
-  // that slot. Caching it early would turn an aborted stream into a cached miss.
+  // that slot. Caching it any earlier would turn a cut-off stream into a cached
+  // miss that outlives the word.
   const misses = new Map();
 
   for await (const frame of search(baseUrl, { ...query, dicts }, { signal })) {
@@ -314,6 +354,10 @@ async function streamCandidate({ post, id, baseUrl, dicts, query, slotsFor, sign
       continue;
     }
 
+    if (frame.t === 'end') {
+      complete = true;
+      continue;
+    }
     if (frame.t !== 'hit') continue;
 
     const entry = {
@@ -324,11 +368,20 @@ async function streamCandidate({ post, id, baseUrl, dicts, query, slotsFor, sign
       morph: frame.morph,
     };
     const key = cacheKey(frame.dict, query);
-    if (frame.outcome === OUTCOME.RESULTS) {
-      misses.delete(key);
-      cache.set(key, entry);
-    } else {
-      misses.set(key, entry);
+    switch (frame.outcome) {
+      case OUTCOME.RESULTS:
+      case OUTCOME.SKIPPED:
+        // Final and stable: a capability does not change between two hovers.
+        misses.delete(key);
+        cache.set(key, entry);
+        break;
+      case OUTCOME.EMPTY:
+        misses.set(key, entry);
+        break;
+      default:
+        // ERROR and DEFERRED are transient (a timeout, the memory cap). Cached,
+        // they would outlive their cause; uncached, the next hover asks again.
+        break;
     }
 
     const payload = { type: HIT, id, i: frame.i, dict: frame.dict, ...entry };
@@ -356,8 +409,8 @@ async function streamCandidate({ post, id, baseUrl, dicts, query, slotsFor, sign
   }
 
   // Misses are cached too: without that, a word whose chain ends in nothing
-  // re-probes the server on every crossing.
-  for (const [key, entry] of misses) cache.set(key, entry);
+  // re-probes the server on every crossing. Only from a complete answer.
+  if (complete) for (const [key, entry] of misses) cache.set(key, entry);
 
   return committed ? { fromCache: false } : false;
 }
@@ -442,7 +495,7 @@ const tabHosts = new Map();
 
 async function paintTab(tabId, host) {
   if (!api.action?.setIcon) return;
-  const settings = await getSettings();
+  const settings = await currentSettings();
   const view = toolbarState({
     settings,
     host: host === undefined ? (tabHosts.get(tabId) ?? null) : host,
@@ -515,7 +568,7 @@ async function runSearch(rawTerm, { tabId = null, frameId = 0, target = null } =
   const term = normalizeTerm(rawTerm);
   if (!term) return { ok: false, message: 'nothing to look up' };
 
-  const settings = await getSettings();
+  const settings = await currentSettings();
   const where = target ?? settings.searchTarget;
 
   if (where === 'popup' && tabId !== null) {
@@ -551,7 +604,7 @@ function normalizeTerm(value) {
 
 /** Article media, as bytes. The popup turns them into a blob URL of its own. */
 async function getMedia(url) {
-  const { baseUrl } = await getSettings();
+  const { baseUrl } = await currentSettings();
   return media.get(url, { baseUrl });
 }
 
@@ -672,7 +725,7 @@ async function stopAudio() {
  * and ok.
  */
 async function smoke() {
-  const { baseUrl } = await getSettings();
+  const { baseUrl } = await currentSettings();
   const started = Date.now();
 
   try {
@@ -684,13 +737,26 @@ async function smoke() {
       message: `${next.dicts.length} dictionaries (begin.total ${next.total}) in ${
         Date.now() - started
       } ms`,
-      // `total` is an upper bound: dictionaries that cannot be described are omitted.
-      omitted: next.total === null ? null : next.total - next.dicts.length,
+      // Every dictionary gets a row, one that cannot be opened included.
+      unavailable: next.dicts.filter((dict) => dict.error).length,
+      conditional: Boolean(next.etag),
       exactCapable: next.dicts.filter((dict) => dict.caps?.Exact).length,
       defaultSelection: defaultSelection(next).map((id) => labelFor(next, id)),
     };
   } catch (error) {
-    if (error instanceof WudictHttpError) {
+    if (error instanceof WudictHttpError && error.status === 421) {
+      // The server's DNS-rebinding guard: it answers only an IP literal or
+      // localhost, unless TRUSTED_HOSTS names the host.
+      return {
+        ok: false,
+        baseUrl,
+        reason: 'http',
+        message:
+          `${baseUrl} refused this host name. Use an IP address (127.0.0.1) or ` +
+          'localhost, or add the name to TRUSTED_HOSTS in wudict.',
+      };
+    }
+    if (error instanceof WudictHttpError || error instanceof ProtocolError) {
       return { ok: false, baseUrl, reason: 'http', message: error.message };
     }
 
@@ -769,7 +835,7 @@ async function buildMenus() {
     if (pending?.then) pending.then(resolve, resolve);
   });
 
-  const settings = await getSettings();
+  const settings = await currentSettings();
 
   if (settings.contextMenu) {
     // %s is the selection, substituted by the browser.
@@ -808,7 +874,7 @@ function create(properties) {
 /** The site item is a verb, so its label has to track what it would do. */
 async function refreshSiteMenuItem() {
   if (!menus) return;
-  const settings = await getSettings();
+  const settings = await currentSettings();
   const tab = await activeTab();
   const host = tab?.id === undefined ? null : (tabHosts.get(tab.id) ?? null);
   const paused = host !== null && settings.siteRules?.[host] === false;
@@ -844,7 +910,7 @@ async function handleMenuClick(info, tab) {
       await probeHealth();
       break;
     case MENU.OPEN: {
-      const { baseUrl } = await getSettings();
+      const { baseUrl } = await currentSettings();
       await openTab(baseUrl, true);
       break;
     }
@@ -860,7 +926,7 @@ async function toggleSite(tabId) {
   const host = tabId === null ? null : (tabHosts.get(tabId) ?? null);
   if (host === null) return { ok: false, message: 'this page has no host' };
 
-  const settings = await getSettings();
+  const settings = await currentSettings();
   const paused = settings.siteRules?.[host] === false;
   await setSettings(withSiteRule(settings, host, paused));
   return { ok: true, host, enabled: paused };
@@ -876,7 +942,7 @@ async function handleCommand(command) {
   const tab = await activeTab();
   switch (command) {
     case 'toggle-enabled': {
-      const settings = await getSettings();
+      const settings = await currentSettings();
       await setSettings({ enabled: !settings.enabled });
       break;
     }
@@ -908,8 +974,12 @@ api.runtime.onStartup.addListener(() => void bootstrap('onStartup'));
 async function bootstrap(trigger) {
   await buildMenus();
   try {
-    const { baseUrl } = await getSettings();
-    const next = await ensureRegistry(baseUrl);
+    const { baseUrl } = await currentSettings();
+    // The kept list serves the first hover at once; the conditional refresh behind
+    // it is a 304 unless the library changed while the browser was closed.
+    const kept = await ensureRegistry(baseUrl);
+    const fresh = Date.now() - kept.fetchedAt < 10_000;
+    const next = kept.etag && !fresh ? await refreshRegistry(baseUrl).catch(() => kept) : kept;
     setHealth(HEALTH.OK);
     console.info(`[wudict] ${trigger}: registry ready, ${next.dicts.length} dictionaries`);
   } catch (error) {
@@ -923,11 +993,17 @@ async function bootstrap(trigger) {
 // menu label with them.
 api.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'sync') return;
+  settingsMemo = null;
   if (changes.contextMenu) void buildMenus();
   else void refreshSiteMenuItem();
   void paintAllTabs();
-  // A new base URL says nothing about whether the old one was reachable.
-  if (changes.baseUrl) setHealth(HEALTH.UNKNOWN);
+  if (changes.baseUrl) {
+    // A new base URL says nothing about whether the old one was reachable, and the
+    // cache is keyed by dictionary id, which another server may reuse for a
+    // different dictionary (the built-in `wudict-howto` on every one of them).
+    setHealth(HEALTH.UNKNOWN);
+    cache.clear();
+  }
 });
 
 // The worker is torn down when idle and rebuilt on the next event, at which point
@@ -958,7 +1034,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // has nothing to chase.
   if (message?.type === 'wudict:state') {
     (async () => {
-      const settings = await getSettings();
+      const settings = await currentSettings();
       const tab = await activeTab();
       const host = tab?.id === undefined ? null : (tabHosts.get(tab.id) ?? null);
       // A stale verdict from minutes ago is worse than none: the panel exists to
@@ -1050,7 +1126,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message?.type === 'wudict:registry') {
     (async () => {
-      const { baseUrl } = await getSettings();
+      const { baseUrl } = await currentSettings();
       return message.refresh ? refreshRegistry(baseUrl) : ensureRegistry(baseUrl);
     })().then(
       (value) => sendResponse({ ok: true, registry: value }),

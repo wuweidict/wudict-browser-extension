@@ -180,8 +180,63 @@ describe('fetchMedia', () => {
     const impl = recorder(reply({ length: 4, body: new Uint8Array(2000) }));
     await assert.rejects(
       fetchMedia('/res/a.png', { baseUrl: BASE, fetchImpl: impl, maxBytes: 1000 }),
-      /2000 bytes, over the 1000 cap/,
+      /over the 1000-byte cap/,
     );
+  });
+
+  it('stops reading a streamed body the moment it passes the cap', async () => {
+    let pulls = 0;
+    const stream = new ReadableStream({
+      pull(controller) {
+        pulls += 1;
+        controller.enqueue(new Uint8Array(400));
+      },
+    });
+    const impl = async () => new Response(stream, { headers: { 'content-type': 'image/png' } });
+    await assert.rejects(
+      fetchMedia('/res/a.png', { baseUrl: BASE, fetchImpl: impl, maxBytes: 1000 }),
+      /over the 1000-byte cap/,
+    );
+    // An endless body: the read ended at the cap, not at exhaustion.
+    assert.ok(pulls <= 5, `pulled ${pulls} chunks`);
+  });
+
+  it('reassembles a multi-chunk streamed body exactly', async () => {
+    const parts = [new Uint8Array([1, 2]), new Uint8Array([3]), new Uint8Array([4, 5, 6])];
+    const stream = new ReadableStream({
+      start(controller) {
+        for (const part of parts) controller.enqueue(part);
+        controller.close();
+      },
+    });
+    const impl = async () => new Response(stream, { headers: { 'content-type': 'audio/mpeg' } });
+    const result = await fetchMedia('/res/a.mp3', { baseUrl: BASE, fetchImpl: impl });
+    assert.equal(result.b64, Buffer.from([1, 2, 3, 4, 5, 6]).toString('base64'));
+    assert.equal(result.bytes, 6);
+  });
+
+  it('treats untranscoded Speex as missing audio', async () => {
+    const impl = recorder(reply({ type: 'audio/ogg' }));
+    await assert.rejects(
+      fetchMedia('/res/word.spx', { baseUrl: BASE, fetchImpl: impl }),
+      /untranscoded Speex/,
+    );
+    // Real Ogg audio under its own name is still fine.
+    const ogg = recorder(reply({ type: 'audio/ogg' }));
+    assert.equal(
+      (await fetchMedia('/res/word.ogg', { baseUrl: BASE, fetchImpl: ogg })).mime,
+      'audio/ogg',
+    );
+  });
+
+  it('passes a timeout signal to the request', async () => {
+    let signal = null;
+    const impl = async (url, init) => {
+      signal = init.signal;
+      return reply({});
+    };
+    await fetchMedia('/res/a.png', { baseUrl: BASE, fetchImpl: impl });
+    assert.ok(signal instanceof AbortSignal);
   });
 });
 

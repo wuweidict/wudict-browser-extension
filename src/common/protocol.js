@@ -11,7 +11,8 @@
 // in-flight fetch.
 //
 // Content script -> background:
-//   { type: LOOKUP, id, candidates: [string], dicts?, mode?, n?, format? }
+//   { type: LOOKUP, id, candidates: [string], dicts?, exclude?, limit?, append?,
+//     mode?, n?, format? }
 //   { type: CANCEL, id }
 //
 // Background -> content script:
@@ -20,9 +21,13 @@
 //   { type: END,    id, term, matched, fromCache }
 //   { type: FAILED, id, reason, status?, message }
 //
-// `morph` is null, or `{ from, to, lang }` when the server found nothing for the
-// typed word in that dictionary and answered for its lemma instead. Such a HIT
-// follows the slot's first (empty) HIT and replaces it.
+// FAILED reasons: 'invalid' · 'no-dictionaries' · 'http' (the server refused the
+// request) · 'protocol' (it answered, malformed) · 'blocked' (nothing answered, or
+// not to this extension).
+//
+// `morph` is null, or `{ from, to, lang }` (any field may be null) when the server
+// found nothing for the typed word in that dictionary and answered for its lemma
+// instead. Such a HIT follows the slot's first (EMPTY) HIT and replaces it.
 //
 // Only one lookup is in flight per port: a new LOOKUP aborts the previous one, which
 // the server honours by stopping work.
@@ -75,13 +80,16 @@ export const END = 'end';
 export const FAILED = 'failed';
 
 /**
- * The four mutually exclusive outcomes of a `hit`. A RESULTS hit terminates its
- * slot; any other may still be replaced by a lemma hit until the stream ends.
+ * The mutually exclusive outcomes of a `hit`. Only EMPTY can change: a lemma hit
+ * may still replace it until the stream ends. Every other outcome is final.
  */
 export const OUTCOME = {
   RESULTS: 'results',
   EMPTY: 'empty',
   SKIPPED: 'skipped',
+  // Not opened: the search hit the server's memory cap. Transient, and a search
+  // of that dictionary alone always answers it.
+  DEFERRED: 'deferred',
   ERROR: 'error',
 };
 

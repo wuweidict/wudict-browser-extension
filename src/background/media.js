@@ -36,6 +36,10 @@ export class MediaError extends Error {
 // anything real and far below what would be uncomfortable to base64 and post.
 export const MAX_MEDIA_BYTES = 4 * 1024 * 1024;
 
+// A /res/ answer that has not finished by then is wedged, and would otherwise hold
+// its in-flight slot — and every caller waiting on it — indefinitely.
+export const MEDIA_TIMEOUT_MS = 15_000;
+
 // btoa wants one string, but building it with `String.fromCharCode(...bytes)` blows
 // the argument limit somewhere around 100 KB — silently on some engines, as a
 // RangeError on others. 8 KiB per apply is safely under every limit.
@@ -100,7 +104,12 @@ export function toBase64(bytes) {
  */
 export async function fetchMedia(
   url,
-  { baseUrl, fetchImpl = globalThis.fetch, maxBytes = MAX_MEDIA_BYTES } = {},
+  {
+    baseUrl,
+    fetchImpl = globalThis.fetch,
+    maxBytes = MAX_MEDIA_BYTES,
+    timeoutMs = MEDIA_TIMEOUT_MS,
+  } = {},
 ) {
   const target = mediaUrl(url, baseUrl);
 
@@ -108,6 +117,7 @@ export async function fetchMedia(
     // No credentials, ever: the server has no cookies and must not start seeing any.
     credentials: 'omit',
     headers: { accept: 'image/*,audio/*' },
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) {
     throw new MediaError(`${target} answered HTTP ${response.status}`);
@@ -122,6 +132,11 @@ export async function fetchMedia(
     // URL lies and the Content-Type does not.
     throw new MediaError(`${target} is ${mime || 'untyped'}, not media`);
   }
+  // A .spx the server could not transcode arrives raw as audio/ogg: Ogg Speex,
+  // which no browser decodes. Missing audio, not a playback error to surface.
+  if (mime === 'audio/ogg' && /\.spx$/i.test(new URL(target).pathname)) {
+    throw new MediaError(`${target} is untranscoded Speex`);
+  }
 
   // Cheap refusal when the server declares the size; the real check is on the body,
   // because Content-Length is advisory and absent on a chunked response.
@@ -130,12 +145,43 @@ export async function fetchMedia(
     throw new MediaError(`${target} declares ${declared} bytes, over the ${maxBytes} cap`);
   }
 
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.length > maxBytes) {
-    throw new MediaError(`${target} is ${bytes.length} bytes, over the ${maxBytes} cap`);
+  const bytes = await readCapped(response, maxBytes, target);
+  return { mime, b64: toBase64(bytes), bytes: bytes.length };
+}
+
+/**
+ * The body, refused the moment it passes `maxBytes` rather than after all of it has
+ * been buffered: Content-Length is advisory, and absent on a chunked response.
+ */
+async function readCapped(response, maxBytes, target) {
+  const over = (size) => new MediaError(`${target} is over the ${maxBytes}-byte cap (${size}+)`);
+  if (!response.body) {
+    const whole = new Uint8Array(await response.arrayBuffer());
+    if (whole.length > maxBytes) throw over(whole.length);
+    return whole;
   }
 
-  return { mime, b64: toBase64(bytes), bytes: bytes.length };
+  const reader = response.body.getReader();
+  const chunks = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > maxBytes) {
+      void reader.cancel().catch(() => {});
+      throw over(size);
+    }
+    chunks.push(value);
+  }
+  if (chunks.length === 1) return chunks[0];
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return bytes;
 }
 
 // Base64 is 4/3 of the bytes and the string is what actually occupies memory, so it

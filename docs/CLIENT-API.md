@@ -2,8 +2,9 @@
 
 The contract for third-party clients of the wudict HTTP server: browser
 extensions, scripts, other front-ends. Written for someone who will never read
-this codebase's source, and **verified against a running server**, not read off
-the code.
+the server's source. Checked against the server source and its OpenAPI document
+on 2026-10-12. The server publishes that document at `GET /api/openapi.yaml`
+(same-origin only: open it in a browser tab, an extension cannot read it).
 
 Everything here is stable. Everything not here is private to the desktop UI and
 will move without notice.
@@ -11,12 +12,24 @@ will move without notice.
 - **Public:** `GET /api/dicts`, `GET /api/search`, `GET /res/{dict}/{name}`,
   and `/` **as a link target only** — its `?q=…&mode=…&dict=…` query string is
   a supported way to hand a lookup to a browser tab (§9). Its HTML is not.
-- **Private — do not depend on:** `/api/prefs`, `/api/ingest`, `/api/setup`,
-  `/api/library`, `/api/rescan`, `/api/reveal`, `/setup`, `/assets/…`
+- **Private — do not depend on:** every other route, for example `/api/prefs`,
+  `/api/config`, `/api/ingest`, `/api/setup`, `/api/library`, `/api/rescan`,
+  `/api/reveal`, `/api/about`, `/api/browse`, `/api/groups`, `/api/lemmas`,
+  `/api/intake`, `/api/reindex`, `/setup`, `/browse`, `/assets/…`
 
 Default origin `http://127.0.0.1:6888`. Both parts are user-configurable
 (`--ip` / `SERVER_IP`, `--port` / `SERVER_PORT`), so a client must treat the
 base URL as configuration, never a constant.
+
+The **host** in that base URL must be an IP literal or `localhost`. Any other
+name (`http://mymac.local:6888`) is answered `421 Misdirected Request` unless
+the user lists it in `TRUSTED_HOSTS`. This is the server's DNS-rebinding guard.
+
+**No access key is needed for the public routes.** When the server listens on a
+non-loopback address, `AUTH` makes every other route require the access key
+(`Authorization: Bearer <key>`, else `401` with `{"auth":"required"}`). The
+three public routes and their preflights stay open, so an extension sends no
+key and holds no secret.
 
 ---
 
@@ -50,6 +63,12 @@ Content-Type: application/json; charset=utf-8
 {"error":"missing q parameter"}
 ```
 
+| status | when |
+|---|---|
+| `400` | `q` blank; `mode` unknown (`contains` included); `format` unknown; a `wildcard` pattern over 64 characters |
+| `404` | no id in `dict` resolves |
+| `421` | the `Host` is not an IP literal, `localhost` or a `TRUSTED_HOSTS` name |
+
 **After it starts** the status is already `200`, so a per-dictionary failure
 rides on that dictionary's own frame as an `error` field (§3). There is **no
 `{"t":"error"}` frame**; nothing else terminates the stream early.
@@ -57,6 +76,10 @@ rides on that dictionary's own frame as an `error` field (§3). There is **no
 So: check `response.ok` first and parse the body as plain JSON if it is false,
 then check each frame's `error` while streaming. Neither check subsumes the
 other.
+
+**Switch on `t` and ignore a `t` you do not know.** Both streams have gained
+frame types over time (`busy` on `/api/dicts`, `morph` on `/api/search`). A
+client that throws on an unknown `t` breaks on the next server release.
 
 ---
 
@@ -68,21 +91,47 @@ Lists what is available. Call it **once at startup**, not per lookup.
 {"t":"begin","total":128}
 {"t":"dict","dict":{"id":"6e0594a94deb","name":"Babylon English-Spanish",
                     "format":"bgl","entries":129224,
-                    "caps":{"Exact":true,"Prefix":true,"Contains":false,"FTS":false}}}
+                    "caps":{"Exact":true,"Prefix":true,"FTS":false,"Wildcard":true}}}
 …
-{"t":"end"}
+{"t":"busy","busy":[{"id":"…","name":"OED2","phase":"indexing","done":120000,"total":576000}]}
+…
+{"t":"end","etag":"\"ac4fd9fecabd8ec4cf544212\""}
 ```
 
 - `id` — opaque, stable while the dictionary stays in place. **Persist the id**,
   but re-resolve by `name` if it ever 404s: ids are derived from the path.
-- `caps` — which modes this dictionary can answer. Asking for an unsupported
-  mode is not an error; that dictionary is simply skipped (`"skipped":true`).
-- Other fields exist (paths, sizes). They are for the desktop panel; ignore them.
-- `total` on `begin` is the number of `dict` frames to expect.
-- This stream has **no error frame and no per-row error field**: a dictionary
-  that cannot be described is omitted, so `total` is an upper bound on the rows
-  you will actually receive. Do not wait for a count that may never arrive —
-  wait for `end`.
+- `caps` — which modes this dictionary can answer **now**: `Exact`, `Prefix`,
+  `FTS`, `Wildcard`. `FTS` stays false until the user builds the full-text
+  index; `Wildcard` stays false until the dictionary is indexed (automatic, but
+  not instant on first run). Asking for an unsupported mode is not an error;
+  that dictionary is simply skipped (`"skipped":true`).
+- `error` — this dictionary could not be opened (`tooLarge` beside it: too
+  large to open on this system). The row is still sent, so `total` on `begin`
+  is exactly the number of `dict` rows. Wait for `end` anyway: it is the only
+  frame that says the list is complete.
+- `articleLang` — ISO 639-1 code of the language the articles are written in,
+  when known. The right default voice for reading a selection aloud.
+- `groups` — the picker's groups this dictionary belongs to (`{f, fl, fo, v,
+  vl}`: facet id and label, facet rank, value id and label). A group is selected
+  by intersecting rows client-side; `/api/search` has no group parameter.
+- Other fields exist (paths, sizes, `job`, `outdated`, `builtin`). They are for
+  the desktop panel; ignore them.
+- `busy` — a progress frame for rows pending 10 s or more, sent every second
+  while there are any and once more, empty, when the last has arrived. A
+  client may show it or ignore it; a row it names may already have arrived.
+- `etag` on `end` — keep it with the rows. On the next start, use the rows you
+  kept at once and send `If-None-Match: <etag>`: an unchanged list answers
+  `304` with no body, and the server decides that without opening a single
+  dictionary. A `200` is the new list, with a new `etag`. No `etag` means do
+  not keep this answer (a row carried an error, an index was being built, or a
+  dictionary was being prepared as it was listed). It is on `end`, not in an
+  `ETag` header, because whether an answer may be kept is known only after its
+  last row. `If-None-Match` is not a CORS-safelisted header, so from an
+  extension origin this request is preflighted; the server's `OPTIONS` answer
+  allows it (§4).
+- `/api/dicts` lists the dictionaries the server has already found; it does not
+  look in the folders again. Files added on disk appear after the user rescans
+  in the app, or after a server restart.
 
 ---
 
@@ -92,11 +141,15 @@ The only endpoint a lookup needs.
 
 | param | values | notes |
 |---|---|---|
-| `q` | the term | required, URL-encoded |
-| `mode` | `exact`, `prefix`, `contains`, `fts` | default `prefix` |
+| `q` | the term | required, URL-encoded (`encodeURIComponent` also encodes a wildcard `?` as `%3F`, which is required) |
+| `mode` | `exact`, `prefix`, `fts`, `wildcard` | default `prefix`. `fuzzy` is a legacy alias of `prefix`. `contains` is retired and is a **400**: use `*word*` in `wildcard` |
 | `dict` | `all`, one id, or a **comma-separated ordered list** | default `all`; no length limit |
-| `n` | max results **per dictionary** | default **20** — too many for hover; send it explicitly |
+| `n` | max results **per dictionary** | default **20**, capped at 500 — too many for hover; send it explicitly |
 | `format` | `raw`, `clean`, `text` | default `raw`; see §8 |
+| `hl` | `1` to mark the query's words in each article | read only with `mode=fts`; default off; see §8 |
+
+A search is cut off after **30 s**, or after 5 minutes when it covers exactly
+one dictionary.
 
 ### Frames
 
@@ -110,7 +163,7 @@ Captured from a running server, verbatim:
 ```
 
 **`i` is present on every frame and meaningful only on `hit`.** The encoder
-emits it unconditionally, so `begin` and `end` both carry a meaningless `"i":0`.
+emits it unconditionally, so `begin`, `morph` and `end` carry a meaningless `"i":0`.
 Do not use the presence of `i` to decide anything — switch on `t` first.
 
 `t` is one of exactly four values:
@@ -118,8 +171,8 @@ Do not use the presence of `i` to decide anything — switch on `t` first.
 | `t` | fields | meaning |
 |---|---|---|
 | `begin` | `slots[]` | the layout, in the order you asked for. Always first, exactly once. |
-| `hit` | `i`, `dict`, `name`, and then `results[]` **or** `skipped` **or** `error` | one dictionary has finished. One per slot, plus at most one lemma hit (below). |
-| `morph` | `from`, `to`, `lang` | every `hit` after it answers `to`, the lemma of `from`, not the typed word. Zero or more per stream — one per language with lemma data. |
+| `hit` | `i`, `dict`, `name`, and then `results[]` **or** `skipped` **or** `deferred` **or** `error`; `rung` in `fts` | one dictionary has finished. One per slot, plus at most one lemma hit (below). |
+| `morph` | `from`, `to`, `lang` | every `hit` after it answers `to`, the lemma of `from`, not the typed word. Zero or more per stream — one per language whose lemma found something, after every first-wave `hit`. |
 | `end` | — | the stream is complete. Always last, exactly once. |
 
 `i` indexes into `begin.slots`. **Hits arrive in completion order, not request
@@ -129,20 +182,35 @@ waiting for the slowest dictionary.
 
 ### A `hit` is not always a result
 
-Every slot produces one `hit` in the first wave. A `results[]` hit is final; any
-other may be followed, after a `morph` frame, by a second hit for the same `i`
-that carries the lemma's results and replaces it (lemma hits are never empty —
-a second miss is not sent). So a miss is final only at `end`. Three mutually exclusive outcomes:
+Every slot produces one `hit` in the first wave. Four mutually exclusive
+outcomes, plus a plain miss:
 
 - **`results[]`** — found. Uses Go field names, capitalised: `Headword`, `Body`.
 - **`"skipped":true`, no `results`** — this dictionary cannot answer this
   `mode` (see `caps` in §2). Not an error; expected whenever a mixed set of
-  dictionaries is queried with `contains` or `fts`.
+  dictionaries is queried with `fts` or `wildcard`.
+- **`"deferred":true`, no `results`** — not opened, because the search reached
+  its memory cap (`SEARCH_MEMORY`; off on desktop by default, on by default on
+  Android, and only dictionaries that are not yet indexed count against it).
+  Not an error: a search of this dictionary alone always answers it, so offer
+  that. `indexing:true` beside it means the dictionary is being indexed right
+  now and will stop being deferred when that finishes. `bytes` is the estimated
+  cost, for logs.
 - **`"error":"…"`, no `results`** — this dictionary failed. The others are
   unaffected and the stream continues.
+- **none of these** — the dictionary searched and found nothing.
 
-A `hit` with none of the three is a dictionary that answered with no matches.
-Treat all four as "slot `i` has answered"; only `results[]` closes it for good.
+Only the plain miss can change. After the first wave, a slot that missed may
+get a second `hit` for the same `i`, preceded by a `morph` frame, carrying the
+lemma's results; it replaces the miss. A lemma hit always has `results`: a
+second miss is not sent. So a `results[]`, `skipped`, `deferred` or `error`
+hit is final at once, and a miss is final only at `end`.
+
+`rung` appears only in `fts`: `phrase` (the words adjacent and in order),
+`near` (within ten tokens, any order), `words` (anywhere in the article) or
+`query` (an operator expression, answered as written). It is per dictionary,
+so two slots in one response can answer on different rungs. Show it when it is
+not `phrase`: the phrase itself was not found there.
 
 `slots[].name` is **the id again, not the dictionary's name.** The real name
 arrives on the `hit`, because naming a dictionary means opening it and `begin`
@@ -164,10 +232,12 @@ server-side. Measured, 5 dictionaries, cold: **315 ms, 66 KB, one HTTP round
 trip.** There is no reason for a client to fan out N requests, and good reason
 not to.
 
-The server opens at most **8 dictionaries concurrently**. Listing more than
-eight does not make the request slower than the equivalent fan-out would be, but
-it does not make it faster either: past eight, latency grows with the queue. For
-a "more" action, eight ids is the point of diminishing returns.
+The server opens at most **8 dictionaries concurrently** on desktop (on Android,
+one per CPU core). Listing more than that does not make the request slower than
+the equivalent fan-out would be, but it does not make it faster either: past
+the limit, latency grows with the queue. For a "more" action, eight ids is the
+point of diminishing returns. A wide list can also come back partly `deferred`
+(above); naming one dictionary per request never does.
 
 This also gives the "look up more dictionaries" flow for free: the first request
 names one id; "more" names the next N ids — **not** including the first, which
@@ -175,13 +245,18 @@ is already on screen.
 
 ### Matching semantics — read this before designing hover
 
-- `exact` falls back to case- and accent-folded equality. For a single word
-  that then finds nothing in a dictionary, the server searches that dictionary
-  again for the word's lemma, with the lemma data for the dictionary's language
-  (English built in, other languages installed by the user; `MORPH_CACHE = 0`
-  turns it off): `q=running` also finds *run*. The second answer arrives as
-  another `hit` frame for the same slot `i`, after a
-  `{"t":"morph","from":…,"to":…,"lang":…}` frame.
+- `exact` falls back to case- and accent-folded equality.
+- **Lemmatization, every mode.** For a one-word query that finds nothing in a
+  dictionary, the server searches that dictionary again for the word's lemma,
+  with the lemma data for the dictionary's language (English built in, other
+  languages installed by the user; `MORPH_CACHE = 0` turns it off):
+  `q=running` also finds *run*. Not for a multi-word query, and not for a
+  `wildcard` pattern that contains `*` or `?`. Only a dictionary that searched
+  and missed is retried: one that hit, was skipped, deferred or failed is not.
+  The answer arrives as another `hit` frame for the same slot `i`, after a
+  `{"t":"morph","i":0,"from":…,"to":…,"lang":…}` frame (one per language that
+  produced results, in language-code order). Every `hit` after a `morph` frame
+  is for `to`, not for what was typed: say so.
 - In practice large dictionaries do store inflected forms (verified on OED:
   `running`, `sped`, `better`, `mice` all hit directly), so hover works better
   than the previous paragraph suggests — but coverage depends on the
@@ -191,15 +266,28 @@ is already on screen.
   stripping → `prefix`).
 - `prefix` returns everything starting with `q`, so for hover it is a poor
   default: hovering *run* yields *runny*, *runway*, *runt*. Use `exact` for
-  hover and offer `prefix` as a deliberate widening.
+  hover and offer `prefix` as a deliberate widening. It ignores case and
+  accents.
+- `wildcard` matches the **whole headword**: `?` is exactly one character, `*`
+  any number including none (`colo*r`, `*ending`, `*word*` for a substring).
+  There is no escape: `*` and `?` are always wildcards. A pattern with a
+  capital letter is matched as typed, case and accents included; any other
+  ignores them. A leading `*` is the slowest kind of query.
+- `fts` searches the article text, not headwords. A multi-word query is read as
+  a phrase first, then within ten words, then the words anywhere, stopping at
+  the first reading that finds something (reported as `rung`, above). Quotes
+  and `AND`, `OR`, `NOT`, `NEAR(a b, n)` are parsed when present and answered as
+  written; an unparseable query is read as plain words. A bare word matches as
+  a prefix (`run` finds *running*); a quoted word matches exactly.
 
 ---
 
 ## 4. CORS for extension origins only. This decides your architecture.
 
-Websites get **no `Access-Control-Allow-Origin` header**, on any endpoint. A
-page cannot read wudict, which is the whole protection an unauthenticated
-loopback server has.
+Websites get **no `Access-Control-Allow-Origin` header**, on any endpoint,
+unless the user names the site's origin in `WEB_ORIGINS` (empty by default; it
+grants the same three routes). A page cannot read wudict, which is the whole
+protection an unauthenticated loopback server has.
 
 **Browser extensions get one, on the public read API only.** Since the release
 that added D69, wudict echoes the request's `Origin` back when — and only
@@ -208,7 +296,7 @@ when — all of this holds:
 | condition | detail |
 |---|---|
 | scheme | `chrome-extension://` or `moz-extension://`, nothing else. `null`, `file://` and every http(s) origin are refused |
-| shape | origin only: a host, no path, no query, no userinfo |
+| shape | origin only: a host, no port, no path, no query, no userinfo |
 | route | exactly `GET /api/dicts`, `GET /api/search`, `GET /res/` |
 | pin (optional) | if `BROWSER_EXTENSIONS` is set, the origin must be on that list |
 
@@ -216,13 +304,16 @@ when — all of this holds:
 client's answer to another. The header is **never** `*`, and
 `Access-Control-Allow-Credentials` is **never** sent: the server has no cookies
 and must not start honouring any. `OPTIONS` on the three routes answers 204
-with `Allow-Methods: GET`, `Allow-Headers: accept`, `Max-Age: 600` — today's
-requests are simple and never preflight, but a future one that does must not
-meet a 405.
+with `Allow-Methods: GET, OPTIONS`, `Allow-Headers: accept, content-type,
+if-none-match` and `Max-Age: 600`, plus `Allow-Private-Network: true` when the
+preflight asks for it. A plain lookup is CORS-simple and never preflights; a
+conditional `/api/dicts` (§2) does, and is allowed.
 
 Everything else stays same-origin. No extension can `DELETE /api/library`, drive
 `/api/ingest` or `/api/rescan`, or read `/api/prefs`, `/api/config`,
-`/api/reveal`.
+`/api/reveal`. A browser request the browser marks `Sec-Fetch-Site: cross-site`
+is answered `403` on every route except these three (and top-level page
+navigations), so this is enforced even where CORS would only hide the answer.
 
 The shape this buys you:
 
@@ -326,13 +417,19 @@ default; fidelity is the exception, not the baseline.
 ## 6. `GET /res/{dictID}/{name}`
 
 Serves a file the dictionary bundles — stylesheet, script, image, audio.
-`{name}` may contain slashes (`js/entry.js`). `.spx` audio is transcoded to WAV
-on the way out, so clients need no Speex decoder.
+`{name}` may contain slashes (`js/entry.js`): send it unencoded, exactly as the
+article references it. `.spx` audio is transcoded to WAV on the way out and
+answered as `audio/wav`, so clients need no Speex decoder. A `.spx` that cannot
+be transcoded, or one supplied by an override folder, is sent raw as
+`audio/ogg`, which a browser cannot play; treat it as missing audio.
 
-Cached `public, max-age=86400`. A missing resource is 404 — common and not an
-error worth surfacing: many dictionaries reference files they do not contain.
+Cached `public, max-age=86400`; an untranscoded `.spx` is `no-store`. A
+seekable file answers `Range` requests. A missing resource is 404 — common and
+not an error worth surfacing: many dictionaries reference files they do not
+contain.
 
-Files placed in `<library folder>/res/` override or supply these; see the README.
+Files placed in `<library folder>/res/` override or supply these and are served
+uncached, so an edit shows on reload; see the README.
 
 ---
 
@@ -354,10 +451,11 @@ and no `/res/` fetches once the dictionary's own CSS/JS are stripped.
 **Keep `n` at 1–3 for hover.** `n` is per dictionary; `n=25` across ten
 dictionaries is megabytes.
 
-**Do not poll `/api/dicts`.** Once at startup, and again only when the user asks.
+**Do not poll `/api/dicts`.** Once at startup, and again only when the user
+asks — and at startup, conditionally, with the `etag` you kept (§2).
 
 **One request in flight per lookup.** The server already parallelises across
-dictionaries (8 at a time), so client-side concurrency buys nothing and costs
+dictionaries (8 at a time on desktop), so client-side concurrency buys nothing and costs
 the abort semantics above: with one request you can cancel cleanly, with five
 you cannot.
 
@@ -393,6 +491,19 @@ Two things `clean` does that a naive strip would not:
 **`text`** — no markup at all. Entities decoded, block boundaries as newlines,
 whitespace collapsed.
 
+### `hl=1` — the match marked in the article
+
+With `mode=fts` and `hl=1`, every match of the query's words inside a `Body` is
+wrapped in `<mark class="wu-hl">`. In every other mode `hl` is ignored: the
+match is the headword itself. Off unless asked, so a client gets the
+dictionary's own bytes by default. Marking is whole-token and prefix-based,
+like the full-text match, and stops at 500 marks per article (the article is
+still complete). `raw` keeps `<mark class="wu-hl">`; `clean` keeps a bare
+`<mark>`, because it drops every `class`; `text` drops the marks with all other
+markup. A popup that shows a full-text result should ask for it and
+scroll the first `<mark>` into view: in a long article the match is otherwise
+below the fold.
+
 ### Measured, on real articles
 
 `q=speed`, nine heavy dictionaries, 748 KB of raw article:
@@ -408,8 +519,9 @@ wide — LDOCE 187 KB → 77 KB (41%), Cambridge Pronouncing 3.6 KB → 0.5 KB (
 OED 125 KB → 91 KB (73%), because OED's markup is genuinely structural while
 LDOCE's is mostly `<span class="…">`.
 
-An unknown `format` is a **400**, not a silent fallback: a client asking for
-something that does not exist should hear about it.
+An unknown `format` is a **400** (`unknown format "x" (raw, clean, text)`), not
+a silent fallback: a client asking for something that does not exist should
+hear about it.
 
 ---
 
@@ -425,32 +537,41 @@ lookup over to a real browser tab. Verified against `applyURL()`:
 | param | values | notes |
 |---|---|---|
 | `q` | the term | **required** — nothing searches without it |
-| `mode` | `prefix`, `exact`, `contains`, `fts` | must match the mode dropdown exactly |
-| `dict` | **one** dictionary id, or `all` | *not* a comma list — see below |
+| `mode` | `prefix`, `exact`, `wildcard`, `fts` | one of the page's four modes, spelled exactly so |
+| `dict` | **one** dictionary id, `all`, or a group id `g:<f>:<v>` | *not* a comma list — see below |
+| `from` | one dictionary id | a one-shot scope for this search only; leaves the dropdown alone (§11) |
 | `theme` | `auto`, `light`, `dark` | **writes** the user's stored preference; don't set it |
 
 ### Always send `mode` and `dict` explicitly
 
-`applyURL` only assigns a parameter that is **present**:
+`applyURL` only assigns a parameter that is **present**, and a `mode` only when
+it is one of the four:
 
 ```js
-if (p.get("mode")) $("mode").value = p.get("mode");
-if (p.get("dict")) $("dict").value = p.get("dict");
+if (!setMode(p.get("mode")) && p.get("q") && notForWords($("mode").value)) setMode("prefix");
+if (p.get("dict")) selectDict(p.get("dict"));
 ```
 
-Anything you omit keeps whatever the user last used, restored from their saved
-preferences. So a "search everywhere" link that omits `dict` will quietly
-search only the dictionary they happen to have selected — the one case where
-being explicit is not pedantry but correctness. Send both, every time.
+A missing or unknown `mode` (`contains` included) keeps the mode the user last
+picked, with one exception: a remembered `fts` or `wildcard` becomes `prefix`,
+because a word handed over is a headword lookup. A missing `dict` keeps the
+user's last selection. So a "search everywhere" link that omits `dict` will
+quietly search only the dictionary they happen to have selected — the one case
+where being explicit is not pedantry but correctness. Send both, every time.
 
 ### `dict` takes exactly one id
 
-It is assigned to a `<select>`, not parsed as a list. A comma-separated value
-matches no option and silently selects nothing, which then searches nothing.
-The comma list of §3 is an `/api/search` feature only.
+It is assigned to a `<select>`, not parsed as a list. The comma list of §3 is an
+`/api/search` feature only; do not send one here.
 
-An id that no longer exists fails the same silent way, so build these links
-from the ids you got in the same session, not from stale storage.
+An id the page does not list yet gets a temporary option, named when its first
+result arrives. An id the server does not know (removed, moved, from another
+library) falls back to `all`, so a stale link still searches, just more widely.
+Build these links from the ids you got in the same session anyway.
+
+A **group** id is `g:` + a row's `groups[].f` + `:` + its `groups[].v` (§2),
+for example `g:pair:en-ru`. A group is known only from the whole list, so a
+group link is answered after the page has loaded it.
 
 Scoping to a **disabled** dictionary works: an explicit `dict=<id>` bypasses
 the user's enabled set. A link to a dictionary they have switched off still
@@ -475,8 +596,11 @@ what the popup deliberately threw away. The global link answers a different
 question — *"who else defines this?"* — so it belongs in the fixed header,
 reachable no matter how far the user has scrolled into one long entry.
 
-Timing is safe: the page runs `applyURL` only after `/api/dicts` has finished,
-so a valid `dict` id is always in the dropdown by the time it is assigned.
+Timing is safe: a link that names one dictionary (`dict=<id>` or `from=<id>`)
+is answered at once, without waiting for the dictionary list, and the dropdown
+shows that dictionary even before the list has arrived. A link to `all` or a
+group is answered once the page has a list: at once from the copy it kept from
+the last visit, otherwise after loading it.
 
 Open with `chrome.tabs.create({url})`, or reuse a remembered tab id with
 `chrome.tabs.update` and fall back to `create` when it has been closed — one
@@ -583,19 +707,31 @@ Verified against `parseRef` and the click handlers. Scheme test:
 /^(?:(?:bword|entry):(?:\/\/)?|[dx]:)/i
 ```
 
-So `bword:`, `bword://`, `entry:`, `entry://`, `d:` and `x:` are all the same
-thing, spelled six ways by six repackers. After the scheme, split at the
-**first literal `#`** — a `#` inside a headword arrives percent-encoded, so
-decoding before splitting would promote it to a delimiter — then
-percent-decode each half.
+So `entry://`, `entry:`, `bword://`, `bword:`, `d:` and `x:` are all the same
+thing, spelled six ways by six repackers. wudict itself only ever sends
+`entry://` (and `entry:@…` for a sub-entry): a dictionary's `bword:` links are
+respelled by the server before they reach a client. `bword:` is Babylon Ltd.'s
+proprietary scheme, still accepted because a dictionary's own script may build
+one. After the scheme, split at the **first literal `#`** — a `#` inside a
+headword arrives percent-encoded, so decoding before splitting would promote it
+to a delimiter — then percent-decode each half (all or nothing: a half that
+does not decode is kept as written), and trim the headword of **spaces and tabs
+only** (a headword may begin or end with U+3000 or NBSP, which
+`String.prototype.trim` would eat).
+
+wudict percent-encodes exactly four things in a headword it links to: `%`,
+`#`, control characters, and a **leading `@`**. That last one is why the
+**sub** test runs on the target **before decoding**: `entry:@Examples` is a
+section of this entry, while `entry://%40home` is the headword `@home`.
 
 | href | kind | what it means |
 |---|---|---|
-| `bword://run` | **lookup** | another headword |
-| `entry:run` · `d:run` · `x:run` | **lookup** | same thing, other spellings |
+| `entry://run` | **lookup** | another headword |
+| `entry:run` · `bword://run` · `d:run` · `x:run` | **lookup** | same thing, other spellings |
 | `defendant` (bare, no scheme) | **lookup** | slob/OALD write cross-references bare |
-| `bword://@Examples` | **sub** | a *section of this entry*, not a word |
-| `bword://#sense2` · `#sense2` | **anchor** | a place in the article on screen |
+| `entry:@Examples` | **sub** | a *section of this entry*, not a word |
+| `entry://%40home` · `entry://C%23` | **lookup** | the headwords `@home` and `C#` |
+| `entry://#sense2` · `#sense2` | **anchor** | a place in the article on screen |
 | `https://…` | external | the open web |
 | `…/x.mp3` | audio | §10 |
 

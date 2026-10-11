@@ -15,6 +15,7 @@ import {
   parseMorph,
   search,
 } from '../src/background/client.js';
+import { ProtocolError } from '../src/background/ndjson.js';
 import { OUTCOME } from '../src/common/protocol.js';
 
 const BASE_URL = process.env.WUDICT_BASE_URL ?? 'http://127.0.0.1:6888';
@@ -56,11 +57,12 @@ describe('buildSearchUrl', () => {
 });
 
 describe('classifyHit', () => {
-  it('distinguishes all four outcomes', () => {
+  it('distinguishes every outcome', () => {
     assert.equal(classifyHit({ results: [{ Headword: 'x' }] }), OUTCOME.RESULTS);
     assert.equal(classifyHit({ results: [] }), OUTCOME.EMPTY);
     assert.equal(classifyHit({ skipped: true }), OUTCOME.SKIPPED);
     assert.equal(classifyHit({ error: 'boom' }), OUTCOME.ERROR);
+    assert.equal(classifyHit({ deferred: true, bytes: 1 }), OUTCOME.DEFERRED);
   });
 
   it('treats explicit nulls as absent', () => {
@@ -89,7 +91,7 @@ describe('droppedIds', () => {
 });
 
 describe('parseMorph', () => {
-  it('accepts a complete frame', () => {
+  it('reads a complete frame', () => {
     assert.deepEqual(parseMorph({ t: 'morph', i: 0, from: 'mice', to: 'mouse', lang: 'en' }), {
       from: 'mice',
       to: 'mouse',
@@ -97,29 +99,27 @@ describe('parseMorph', () => {
     });
   });
 
-  for (const frame of [
-    {},
-    { from: 'mice', to: 'mouse' },
-    { from: '', to: 'x', lang: 'en' },
-    { from: 1, to: 'x', lang: 'en' },
-    null,
-  ]) {
-    it(`refuses ${JSON.stringify(frame)}`, () => assert.equal(parseMorph(frame), null));
-  }
+  it('nulls missing, blank or mistyped fields instead of rejecting the frame', () => {
+    assert.deepEqual(parseMorph({ from: '', to: 1 }), { from: null, to: null, lang: null });
+    assert.deepEqual(parseMorph(null), { from: null, to: null, lang: null });
+  });
 });
 
-describe('search with a lemma wave', () => {
+/** Answer every fetch with these NDJSON frames. */
+function serve(frames, init = {}) {
+  globalThis.fetch = async () =>
+    new Response(frames.map((frame) => JSON.stringify(frame)).join('\n') + '\n', {
+      headers: { 'content-type': 'application/x-ndjson' },
+      ...init,
+    });
+}
+
+describe('search stream semantics', () => {
   const realFetch = globalThis.fetch;
   afterEach(() => {
     globalThis.fetch = realFetch;
   });
 
-  const serve = (frames) => {
-    globalThis.fetch = async () =>
-      new Response(frames.map((frame) => JSON.stringify(frame)).join('\n') + '\n', {
-        headers: { 'content-type': 'application/x-ndjson' },
-      });
-  };
   const collect = async () => {
     const out = [];
     for await (const frame of search('http://wudict.test', {
@@ -131,6 +131,10 @@ describe('search with a lemma wave', () => {
     }
     return out;
   };
+  const hitsOf = (frames) =>
+    frames
+      .filter((frame) => frame.t === 'hit')
+      .map((hit) => [hit.i, hit.outcome, hit.morph?.to ?? null]);
   const begin = {
     t: 'begin',
     i: 0,
@@ -139,60 +143,165 @@ describe('search with a lemma wave', () => {
       { dict: 'b', name: 'b' },
     ],
   };
+  const miss = (i) => ({ t: 'hit', i, dict: 'ab'[i], name: 'AB'[i] });
   const morph = { t: 'morph', i: 0, from: 'mice', to: 'mouse', lang: 'en' };
-  const lemmaHit = {
+  const found = (i) => ({
     t: 'hit',
-    i: 0,
-    dict: 'a',
-    name: 'A',
+    i,
+    dict: 'ab'[i],
+    name: 'AB'[i],
     results: [{ Headword: 'mouse', Body: 'x' }],
-  };
+  });
+  const end = { t: 'end', i: 0 };
 
   it('yields the lemma hit for a slot that missed, tagged with the morph', async () => {
+    serve([begin, miss(1), miss(0), morph, found(0), end]);
+    assert.deepEqual(hitsOf(await collect()), [
+      [1, OUTCOME.EMPTY, null],
+      [0, OUTCOME.EMPTY, null],
+      [0, OUTCOME.RESULTS, 'mouse'],
+    ]);
+  });
+
+  it('yields end only when the server sent it', async () => {
+    serve([begin, miss(0), miss(1), end]);
+    assert.equal((await collect()).at(-1).t, 'end');
+    serve([begin, miss(0)]);
+    assert.ok(!(await collect()).some((frame) => frame.t === 'end'));
+  });
+
+  it('drops a second hit without a morph frame, and a third after one', async () => {
+    serve([begin, miss(0), found(0), morph, found(0), found(0), end]);
+    assert.deepEqual(hitsOf(await collect()), [
+      [0, OUTCOME.EMPTY, null],
+      [0, OUTCOME.RESULTS, 'mouse'],
+    ]);
+  });
+
+  it('drops a lemma hit for a slot whose first hit was final', async () => {
+    serve([begin, found(0), { ...miss(1), skipped: true }, morph, found(0), found(1), end]);
+    assert.deepEqual(hitsOf(await collect()), [
+      [0, OUTCOME.RESULTS, null],
+      [1, OUTCOME.SKIPPED, null],
+    ]);
+  });
+
+  it('drops hits outside the slot range and keeps going', async () => {
     serve([
       begin,
-      { t: 'hit', i: 1, dict: 'b', name: 'B' },
-      { t: 'hit', i: 0, dict: 'a', name: 'A' },
-      morph,
-      lemmaHit,
-      { t: 'end', i: 0 },
+      { ...miss(0), i: 7 },
+      { ...miss(0), i: -1 },
+      { ...miss(0), i: '0' },
+      found(1),
+      end,
     ]);
+    assert.deepEqual(hitsOf(await collect()), [[1, OUTCOME.RESULTS, null]]);
+  });
+
+  it('takes the dictionary id from the slot, not the frame', async () => {
+    serve([begin, { ...found(0), dict: 'zzz' }, end]);
+    const hit = (await collect()).find((frame) => frame.t === 'hit');
+    assert.equal(hit.dict, 'a');
+  });
+
+  it('survives a malformed morph frame and an unknown frame type', async () => {
+    serve([begin, miss(0), { t: 'morph', i: 0 }, { t: 'future', x: 1 }, found(0), end]);
     const hits = (await collect()).filter((frame) => frame.t === 'hit');
+    assert.equal(hits.at(-1).outcome, OUTCOME.RESULTS);
+    assert.deepEqual(hits.at(-1).morph, { from: null, to: null, lang: null });
+  });
+
+  it('classifies a deferred slot as final', async () => {
+    serve([begin, { ...miss(0), deferred: true, bytes: 9 }, morph, found(0), end]);
+    assert.deepEqual(hitsOf(await collect()), [[0, OUTCOME.DEFERRED, null]]);
+  });
+
+  it('raises a ProtocolError for a line that is not JSON', async () => {
+    globalThis.fetch = async () => new Response('{"t":"begin","slots":[]}\nnot json\n');
+    await assert.rejects(collect, (error) => error instanceof ProtocolError);
+  });
+});
+
+describe('fetchDicts', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  const rows = [
+    { t: 'begin', total: 2 },
+    {
+      t: 'dict',
+      dict: { id: 'a', name: 'A', format: 'mdx', entries: 1, caps: { Exact: true }, path: '/x' },
+    },
+    { t: 'busy', busy: [{ id: 'b', name: 'b', phase: 'indexing', done: 1, total: 9 }] },
+    { t: 'dict', dict: { id: 'b', name: 'B', format: 'dsl', entries: 0, caps: {}, error: 'boom' } },
+  ];
+
+  it('keeps the etag from end, and each row narrowed with its error', async () => {
+    serve([...rows, { t: 'end', etag: '"abc"' }]);
+    const { total, dicts, etag } = await fetchDicts('http://wudict.test');
+    assert.equal(total, 2);
+    assert.equal(etag, '"abc"');
     assert.deepEqual(
-      hits.map((hit) => [hit.i, hit.outcome, hit.morph?.to ?? null]),
+      dicts.map((dict) => [dict.id, dict.error]),
       [
-        [1, OUTCOME.EMPTY, null],
-        [0, OUTCOME.EMPTY, null],
-        [0, OUTCOME.RESULTS, 'mouse'],
+        ['a', null],
+        ['b', 'boom'],
       ],
+    );
+    assert.ok(!('path' in dicts[0]));
+  });
+
+  it('orders rows by name, whatever order they completed in', async () => {
+    const row = (id, name) => ({ t: 'dict', dict: { id, name, caps: {} } });
+    serve([
+      { t: 'begin', total: 3 },
+      row('3', 'oxford'),
+      row('1', 'Cambridge'),
+      row('2', 'LDOCE 10'),
+      { t: 'end' },
+    ]);
+    const { dicts } = await fetchDicts('http://wudict.test');
+    assert.deepEqual(
+      dicts.map((dict) => dict.name),
+      ['Cambridge', 'LDOCE 10', 'oxford'],
     );
   });
 
-  it('still refuses a second hit for a slot without a morph frame', async () => {
-    serve([begin, { t: 'hit', i: 0, dict: 'a', name: 'A' }, lemmaHit, { t: 'end', i: 0 }]);
-    await assert.rejects(collect, /slot 0 produced two hits/);
+  it('reports no etag when the server withholds one', async () => {
+    serve([...rows, { t: 'end' }]);
+    assert.equal((await fetchDicts('http://wudict.test')).etag, null);
   });
 
-  it('refuses a third hit for the same slot', async () => {
-    serve([
-      begin,
-      { t: 'hit', i: 0, dict: 'a', name: 'A' },
-      morph,
-      lemmaHit,
-      lemmaHit,
-      { t: 'end', i: 0 },
-    ]);
-    await assert.rejects(collect, /slot 0 produced two hits/);
+  it('sends If-None-Match only with an etag, and reads a 304 as unchanged', async () => {
+    const seen = [];
+    globalThis.fetch = async (url, init) => {
+      seen.push(init.headers['if-none-match'] ?? null);
+      return new Response(null, { status: 304 });
+    };
+    assert.deepEqual(await fetchDicts('http://wudict.test', { etag: '"abc"' }), {
+      notModified: true,
+    });
+    assert.deepEqual(seen, ['"abc"']);
+
+    serve([...rows, { t: 'end' }]);
+    let header = 'unset';
+    const inner = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      header = init.headers['if-none-match'];
+      return inner(url, init);
+    };
+    await fetchDicts('http://wudict.test');
+    assert.equal(header, undefined);
   });
 
-  it('refuses a malformed morph frame', async () => {
-    serve([
-      begin,
-      { t: 'hit', i: 0, dict: 'a', name: 'A' },
-      { t: 'morph', i: 0, from: 'mice' },
-      { t: 'end', i: 0 },
-    ]);
-    await assert.rejects(collect, /malformed morph frame/);
+  it('raises a ProtocolError when the list ends without end', async () => {
+    serve(rows);
+    await assert.rejects(
+      fetchDicts('http://wudict.test'),
+      (error) => error instanceof ProtocolError,
+    );
   });
 });
 
@@ -224,7 +333,7 @@ describe('live client', () => {
     }
   });
 
-  it('search yields begin then exactly one hit per slot', async (t) => {
+  it('search yields begin, one hit per slot, then end', async (t) => {
     if (!reachable) return t.skip(`no wudict at ${BASE_URL}`);
     const dicts = exactIds.slice(0, 3);
     const frames = [];
@@ -236,7 +345,8 @@ describe('live client', () => {
       dicts,
     );
 
-    const hits = frames.slice(1);
+    assert.equal(frames.at(-1).t, 'end');
+    const hits = frames.slice(1, -1);
     assert.equal(hits.length, dicts.length);
     for (const hit of hits) {
       assert.equal(hit.t, 'hit');
@@ -246,8 +356,6 @@ describe('live client', () => {
       assert.ok(Object.values(OUTCOME).includes(hit.outcome));
       assert.ok(Array.isArray(hit.results));
     }
-    // Nothing is yielded after the stream ends.
-    assert.ok(!frames.some((frame) => frame.t === 'end'));
   });
 
   it('answers an inflected form with its lemma', async (t) => {
@@ -256,7 +364,7 @@ describe('live client', () => {
     for await (const frame of search(BASE_URL, {
       ...QUERY,
       q: 'mice',
-      dicts: exactIds.slice(0, 8),
+      dicts: exactIds.slice(0, 32),
     })) {
       if (frame.t === 'hit' && frame.morph) lemmaHits.push(frame);
     }

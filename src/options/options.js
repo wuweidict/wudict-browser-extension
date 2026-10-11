@@ -202,7 +202,8 @@ function renderDicts() {
   const cap = CAP_FOR_MODE.exact;
 
   for (const dict of registry.dicts) {
-    const capable = dict.caps?.[cap] === true;
+    // A row the server could not open is listed with `error` and is never queried.
+    const capable = !dict.error && dict.caps?.[cap] === true;
     const item = document.createElement('li');
     if (!capable) item.className = 'incapable';
 
@@ -219,11 +220,14 @@ function renderDicts() {
 
     const caps = document.createElement('span');
     caps.className = 'caps';
-    caps.textContent = capable
-      ? auto.has(dict.id)
-        ? 'auto-selected'
-        : `${formatEntries(dict.entries)} entries`
-      : 'no exact lookup';
+    caps.textContent = dict.error
+      ? 'unavailable'
+      : capable
+        ? auto.has(dict.id)
+          ? 'auto-selected'
+          : `${formatEntries(dict.entries)} entries`
+        : 'no exact lookup';
+    if (dict.error) caps.title = dict.error;
 
     label.append(box, name, caps);
     item.append(label);

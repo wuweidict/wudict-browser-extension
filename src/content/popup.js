@@ -138,6 +138,7 @@ const STYLES = `
   .note { padding: 2px 10px 8px; opacity: 0.5; font-style: italic; }
   .morph { padding: 0 10px 2px; font-size: 12px; opacity: 0.6; }
   .note.error { color: #a12; opacity: 0.85; font-style: normal; }
+  .note .act-inline { color: #0b5cad; font-style: normal; }
   .pending { padding: 2px 10px 8px; opacity: 0.4; }
   .more {
     display: block; width: 100%;
@@ -150,7 +151,7 @@ const STYLES = `
   @media (prefers-color-scheme: dark) {
     .panel { color: #e8e6e0; background: #23231f; border-color: rgba(255,255,255,0.16); }
     .term { background: #2d2d27; border-bottom-color: rgba(255,255,255,0.12); }
-    .term .act { color: #7ab8ff; }
+    .term .act, .note .act-inline { color: #7ab8ff; }
     .term .act:hover { background: rgba(255,255,255,0.12); }
     .slot { border-top-color: rgba(255,255,255,0.09); }
     .body a { color: #7ab8ff; }
@@ -520,6 +521,8 @@ export function createPopup({ onMore, onEnter, onLeave, onOpen }) {
 
     // The real name arrives on the hit; the placeholder carried the registry label.
     slot.dataset.name = name || group.slots[i]?.name || '';
+    // A lemma hit replaces what the slot showed; anything it loaded goes with it.
+    releaseSlot(slot);
     slot.replaceChildren();
     slot.append(text('div', slot.dataset.name, 'dict'));
 
@@ -528,7 +531,10 @@ export function createPopup({ onMore, onEnter, onLeave, onOpen }) {
 
     if (outcome === OUTCOME.RESULTS) {
       // The server answered for a different word than the one hovered; say so.
-      if (morph) slot.append(text('div', `${morph.from} → ${morph.to}`, 'morph'));
+      if (morph) {
+        const label = morph.to ? `${morph.from ?? currentTerm} → ${morph.to}` : 'base form';
+        slot.append(text('div', label, 'morph'));
+      }
       for (const result of results) {
         const body = document.createElement('div');
         body.className = 'body';
@@ -545,6 +551,18 @@ export function createPopup({ onMore, onEnter, onLeave, onOpen }) {
       slot.append(text('div', error ?? 'lookup failed', 'note error'));
       return;
     }
+    if (outcome === OUTCOME.DEFERRED) {
+      // Not an error: the search hit the server's memory cap. Naming this one
+      // dictionary alone always answers it, which is what the link does.
+      const note = text('div', 'Not searched (memory limit). ', 'note');
+      const link = text('a', 'Search it in wudict', 'act-inline');
+      link.href = '#';
+      link.dataset.act = 'one';
+      link.dataset.dict = slot.dataset.dict;
+      note.append(link);
+      slot.append(note);
+      return;
+    }
     if (outcome === OUTCOME.SKIPPED) {
       // Expected whenever a mixed set is queried with a mode it cannot answer.
       slot.append(text('div', 'does not support this search mode', 'note'));
@@ -553,17 +571,22 @@ export function createPopup({ onMore, onEnter, onLeave, onOpen }) {
     slot.append(text('div', 'no entry', 'note'));
   }
 
+  /** Stop watching and loading anything inside a slot about to lose its content. */
+  function releaseSlot(slot) {
+    for (const element of slot.querySelectorAll('[data-wd-src]')) {
+      mediaObserver?.unobserve(element);
+    }
+    releaseBlobs(slot);
+  }
+
   /** Drop slots that never produced anything worth showing. */
   function prune() {
     for (const group of groups) {
       for (const [i, slot] of group.elements) {
-        if (slot.querySelector('.body')) continue;
+        if (slot.querySelector('.body, [data-act]')) continue;
         observer?.unobserve(slot);
         visibleSlots.delete(slot);
-        for (const element of slot.querySelectorAll('[data-wd-src]')) {
-          mediaObserver?.unobserve(element);
-        }
-        releaseBlobs(slot);
+        releaseSlot(slot);
         slot.remove();
         group.elements.delete(i);
       }

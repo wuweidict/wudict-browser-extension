@@ -54,6 +54,22 @@ describe('classifyRef — sections', () => {
     assert.equal(ref.label, 'Examples');
   });
 
+  it('tests for a section before decoding: %40 is a headword @', () => {
+    const ref = classifyRef('entry://%40home');
+    assert.equal(ref.kind, REF.LOOKUP);
+    assert.equal(ref.q, '@home');
+    assert.equal(classifyRef('entry:@Examples').kind, REF.SUB);
+  });
+
+  it("trims spaces and tabs only, keeping a headword's own U+3000 and NBSP", () => {
+    assert.equal(classifyRef('entry://%E3%80%80word%C2%A0').q, '\u3000word\u00a0');
+    assert.equal(classifyRef('entry:// \tword\t ').q, 'word');
+  });
+
+  it('keeps a half that does not decode as written', () => {
+    assert.equal(classifyRef('entry://100%').q, '100%');
+  });
+
   it('recognises a bare @-section too', () => {
     assert.equal(classifyRef('@Word Origin').kind, REF.SUB);
   });

@@ -17,7 +17,7 @@ import {
 
 const BASE_URL = 'http://127.0.0.1:6888';
 
-function dict(id, name, caps = { Exact: true, Prefix: true, Contains: false, FTS: false }) {
+function dict(id, name, caps = { Exact: true, Prefix: true, FTS: false, Wildcard: false }) {
   return { id, name, format: 'bgl', entries: 1000, caps };
 }
 
@@ -27,7 +27,7 @@ const registry = buildRegistry({
   dicts: [
     dict('aaa', 'Oxford English Dictionary'),
     dict('bbb', 'LDOCE'),
-    dict('ccc', 'Contains Only', { Exact: false, Prefix: false, Contains: true, FTS: false }),
+    dict('ccc', 'Wildcard Only', { Exact: false, Prefix: false, FTS: false, Wildcard: true }),
     dict('ddd', 'Merriam-Webster'),
   ],
 });
@@ -91,8 +91,17 @@ describe('defaultSelection', () => {
     assert.ok(!selected.includes('ccc'));
   });
 
-  it('selects the contains-capable dictionary for mode=contains', () => {
-    assert.deepEqual(defaultSelection(registry, { mode: 'contains', limit: 10 }), ['ccc']);
+  it('selects the wildcard-capable dictionary for mode=wildcard', () => {
+    assert.deepEqual(defaultSelection(registry, { mode: 'wildcard', limit: 10 }), ['ccc']);
+  });
+
+  it('never selects a dictionary the server could not open', () => {
+    const broken = buildRegistry({
+      baseUrl: BASE_URL,
+      total: 2,
+      dicts: [{ ...dict('x', 'X'), error: 'too large' }, dict('y', 'Y')],
+    });
+    assert.deepEqual(defaultSelection(broken, { limit: 10 }), ['y']);
   });
 
   it('keeps the list small by default', () => {
@@ -108,7 +117,7 @@ describe('defaultSelection', () => {
     const ftsOnly = buildRegistry({
       baseUrl: BASE_URL,
       total: 1,
-      dicts: [dict('x', 'X', { Exact: false, Prefix: false, Contains: false, FTS: false })],
+      dicts: [dict('x', 'X', { Exact: false, Prefix: false, FTS: false, Wildcard: false })],
     });
     assert.deepEqual(defaultSelection(ftsOnly, { mode: 'fts' }), []);
   });

@@ -40,14 +40,17 @@ export const REF = {
  * perfectly ordinary http(s) URL.
  */
 export function classifyRef(rawHref) {
-  const href = typeof rawHref === 'string' ? rawHref.trim() : '';
+  // ASCII whitespace only, as a URL parser strips it. `String.prototype.trim` would
+  // also eat a headword's own trailing U+3000 or NBSP.
+  const href =
+    typeof rawHref === 'string' ? rawHref.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '') : '';
   if (href === '') return { kind: REF.IGNORE };
 
   if (AUDIO_RE.test(href)) return { kind: REF.AUDIO, url: href };
 
   // A place in the article already on screen.
   if (href.startsWith('#')) {
-    const id = safeDecode(href.slice(1));
+    const id = decodeHalf(href.slice(1));
     return id ? { kind: REF.ANCHOR, id } : { kind: REF.IGNORE };
   }
 
@@ -69,24 +72,33 @@ export function classifyRef(rawHref) {
  */
 function afterScheme(rest) {
   const hash = rest.indexOf('#');
-  const word = safeDecode(hash === -1 ? rest : rest.slice(0, hash));
-  const fragment = hash === -1 ? '' : safeDecode(rest.slice(hash + 1));
+  const target = hash === -1 ? rest : rest.slice(0, hash);
+  const word = decodeHalf(target);
+  const fragment = hash === -1 ? '' : decodeHalf(rest.slice(hash + 1));
 
   if (word === '') {
     return fragment ? { kind: REF.ANCHOR, id: fragment } : { kind: REF.IGNORE };
   }
   // MDict repacks store an entry's collapsible sections as headwords beginning
-  // with `@`. They are real headwords and resolve; the `@` passes through.
-  if (word.startsWith('@')) return { kind: REF.SUB, q: word, label: word.slice(1) };
+  // with `@`. They are real headwords and resolve; the `@` passes through. Tested
+  // BEFORE decoding: wudict encodes a headword's own leading `@` as `%40`, so
+  // `entry://%40home` is the word `@home`, not a section.
+  if (/^[ \t]*@/.test(target)) return { kind: REF.SUB, q: word, label: word.slice(1) };
   return { kind: REF.LOOKUP, q: word };
 }
 
-function safeDecode(value) {
+/**
+ * Percent-decode all or nothing — a half that does not decode is kept as written —
+ * then trim spaces and tabs only: a headword may begin or end with U+3000 or NBSP.
+ */
+function decodeHalf(value) {
+  let decoded = value;
   try {
-    return decodeURIComponent(value).trim();
+    decoded = decodeURIComponent(value);
   } catch {
-    return value.trim();
+    // Kept as written.
   }
+  return decoded.replace(/^[ \t]+|[ \t]+$/g, '');
 }
 
 /**
