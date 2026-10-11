@@ -1,0 +1,20 @@
+wudict Hover — changelog
+
+0.1.1
+
+Fixed
+- Inflected words now show a definition. Examples: "mice", "went", "houses".
+  Before this fix, the popup did not open for these words.
+- A lookup of an inflected word no longer shows "Cannot reach wudict".
+
+New
+- If a dictionary does not list the word, wudict finds its base form.
+  The popup shows the change above the entry, for example "mice → mouse".
+- This feature needs a wudict version with lemmatization. English is built in.
+  You can install other languages in wudict, under Lemmatization.
+
+Changed
+- The Options page and the help text explain the base-form lookup.
+
+Privacy
+- No change. The extension sends lookups only to your local wudict server.
