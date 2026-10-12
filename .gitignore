@@ -13,3 +13,4 @@ chrome-key.pem
 
 .DS_Store
 VERSION.tmp
+ignored/
